@@ -1,0 +1,114 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "username/memcached"
+
+import {
+  "moonbitlang/core/buffer",
+  "moonbitlang/core/debug",
+}
+
+// Values
+
+// Errors
+pub suberror ProtocolError {
+  Remote(RemoteErrorKind, String)
+  Malformed(String)
+} derive(@debug.Debug)
+
+pub suberror TransportError {
+  Io(String)
+} derive(@debug.Debug)
+
+// Types and methods
+pub struct Client {
+  conn : &Connection
+  decoder : Decoder
+}
+pub fn Client::add(Self, String, Bytes) -> Status raise
+pub fn Client::append(Self, String, Bytes) -> Status raise
+pub fn Client::cas(Self, String, Bytes, UInt64) -> Status raise
+pub fn Client::decr(Self, String, UInt64) -> UInt64 raise
+pub fn Client::delete(Self, String) -> Status raise
+pub fn Client::execute(Self, Request) -> Response raise
+pub fn Client::get(Self, Array[String]) -> Array[RetrievedValue] raise
+pub fn Client::gets(Self, Array[String]) -> Array[RetrievedValue] raise
+pub fn Client::incr(Self, String, UInt64) -> UInt64 raise
+pub fn Client::new(&Connection) -> Self
+pub fn Client::prepend(Self, String, Bytes) -> Status raise
+pub fn Client::quit(Self) -> Unit raise
+pub fn Client::replace(Self, String, Bytes) -> Status raise
+pub fn Client::set(Self, String, Bytes) -> Status raise
+pub fn Client::store(Self, StorageOp, String, Bytes, Int, Int, UInt64?) -> Status raise
+
+pub struct Decoder {
+  mut buffer : Bytes
+}
+pub fn Decoder::buffered(Self) -> Int
+pub fn Decoder::feed(Self, BytesView) -> Unit
+pub fn Decoder::new() -> Self
+pub fn Decoder::next(Self) -> Response? raise ProtocolError
+
+pub enum RemoteErrorKind {
+  Generic
+  Client
+  Server
+} derive(Eq, @debug.Debug)
+
+pub(all) enum Request {
+  Storage(op~ : StorageOp, key~ : String, flags~ : Int, exptime~ : Int, value~ : Bytes, cas~ : UInt64?)
+  Get(keys~ : Array[String], with_cas~ : Bool)
+  Delete(key~ : String)
+  Incr(key~ : String, delta~ : UInt64)
+  Decr(key~ : String, delta~ : UInt64)
+  Quit
+} derive(Eq, @debug.Debug)
+pub fn Request::to_bytes(Self) -> Bytes
+
+pub enum Response {
+  Values(Array[RetrievedValue])
+  Status(Status)
+  Counter(UInt64)
+} derive(Eq, @debug.Debug)
+
+pub struct RetrievedValue {
+  key : String
+  flags : Int
+  data : Bytes
+  cas : UInt64?
+} derive(Eq, @debug.Debug)
+
+pub struct ScriptedConnection {
+  chunks : Array[Bytes]
+  mut index : Int
+  mut pending : Bytes
+  written : @buffer.Buffer
+}
+pub fn ScriptedConnection::new(Array[Bytes]) -> Self
+pub fn ScriptedConnection::written(Self) -> Bytes
+pub impl Connection for ScriptedConnection
+
+pub(all) enum Status {
+  Stored
+  NotStored
+  Exists
+  NotFound
+  Deleted
+  Touched
+} derive(Eq, @debug.Debug)
+
+pub(all) enum StorageOp {
+  Set
+  Add
+  Replace
+  Append
+  Prepend
+  Cas
+} derive(Eq, @debug.Debug)
+
+// Type aliases
+
+// Traits
+pub(open) trait Connection {
+  fn write(Self, BytesView) -> Unit raise TransportError
+  fn read(Self, Int) -> Bytes raise TransportError
+  fn close(Self) -> Unit raise TransportError
+}

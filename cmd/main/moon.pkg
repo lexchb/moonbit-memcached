@@ -1,0 +1,5 @@
+import {
+  "username/memcached" @lib,
+}
+
+pkgtype(kind: "executable")
