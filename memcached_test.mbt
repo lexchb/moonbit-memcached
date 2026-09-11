@@ -54,6 +54,39 @@ fn reaction(input : Bytes) -> String {
 }
 
 ///|
+/// A string of `n` `k` characters, used to probe the key length limit.
+fn key_of_length(n : Int) -> String {
+  let builder = StringBuilder()
+  for _ in 0..<n {
+    builder.write_char('k')
+  }
+  builder.to_string()
+}
+
+///|
+/// Describe how the client reacts to `key` used as a storage key.
+///
+/// A fresh connection answers `STORED`, so a key the client accepts is reported
+/// as "accepted" and one it refuses as "malformed".
+fn store_reaction(key : String) -> String {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"STORED\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  try {
+    let _ = client.set(key, b"x")
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+}
+
+///|
 test "storage request encodes the command line and the data block" {
   let request : @memcached.Request = @memcached.Request::Storage(
     op=@memcached.StorageOp::Set,
@@ -306,4 +339,48 @@ test "an unrecognised response line is reported as malformed" {
       }
   }
   assert_true(outcome == "malformed")
+}
+
+///|
+test "a key that fits the command line is accepted" {
+  assert_true(store_reaction("foo") == "accepted")
+  assert_true(store_reaction(key_of_length(250)) == "accepted")
+}
+
+///|
+test "keys that cannot travel in a command line are rejected" {
+  assert_true(store_reaction("") == "malformed")
+  assert_true(store_reaction("has space") == "malformed")
+  assert_true(store_reaction("has\ttab") == "malformed")
+  assert_true(store_reaction("has\nnewline") == "malformed")
+  assert_true(store_reaction(key_of_length(251)) == "malformed")
+}
+
+///|
+test "a retrieval without keys is rejected before anything is written" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"END\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  let outcome = try {
+    let _ = client.get([])
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+  assert_true(outcome == "malformed")
+  assert_true(connection.written() == b"")
+}
+
+///|
+test "an oversized byte count waits for more data instead of misframing" {
+  let decoder = @memcached.Decoder::new()
+  decoder.feed(b"VALUE k 0 1000000\r\nbar\r\nEND\r\n")
+  assert_true(decoder.next() is None)
+  assert_true(decoder.buffered() == 29)
 }

@@ -24,6 +24,7 @@ pub fn Client::new(conn : &Connection) -> Client {
 /// Reads are retried until a whole response is buffered, so a response split
 /// across several packets is reassembled transparently.
 pub fn Client::execute(self : Client, request : Request) -> Response raise {
+  validate_request(request)
   self.conn.write(request.to_bytes().view())
   while true {
     match self.decoder.next() {
@@ -156,8 +157,11 @@ pub fn Client::decr(
 ///|
 /// `quit`: ask the server to hang up, then release the local channel.
 ///
-/// The server sends no reply to `quit`, so nothing is read back.
+/// The server sends no reply to `quit`, so nothing is read back. The channel is
+/// closed even when the command cannot be written, so a failed send does not
+/// leak it; the send error is re-raised afterwards.
 pub fn Client::quit(self : Client) -> Unit raise {
+  errdefer self.conn.close()
   self.conn.write(Request::Quit.to_bytes().view())
   self.conn.close()
 }
@@ -183,5 +187,59 @@ fn expect_counter(response : Response) -> UInt64 raise {
   match response {
     Counter(value) => value
     _ => raise ProtocolError::Malformed("expected a counter value")
+  }
+}
+
+///|
+/// Longest key memcached accepts, in bytes.
+const MAX_KEY_LENGTH : Int = 250
+
+///|
+/// Whether `key` can be carried in a command line.
+///
+/// Keys must be non-empty, at most 250 bytes long, and free of whitespace and
+/// control characters, because the server splits the command line on spaces.
+/// The length is measured in UTF-8 bytes, which is the unit the server counts.
+fn is_valid_key(key : String) -> Bool {
+  let bytes = @utf8.encode(key.view())
+  if bytes.length() == 0 || bytes.length() > MAX_KEY_LENGTH {
+    return false
+  }
+  for byte in bytes {
+    let code = byte.to_int()
+    if code <= 0x20 || code == 0x7F {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn validate_key(key : String) -> Unit raise ProtocolError {
+  guard is_valid_key(key) else {
+    raise Malformed("key cannot be sent in a command line")
+  }
+}
+
+///|
+/// Reject a request that the text protocol cannot express.
+///
+/// Encoding only reports what a request looks like on the wire, so the client
+/// checks the invariants that the command line relies on before writing.
+fn validate_request(request : Request) -> Unit raise ProtocolError {
+  match request {
+    Storage(key~, ..) => validate_key(key)
+    Get(keys~, ..) => {
+      guard keys.length() > 0 else {
+        raise Malformed("a retrieval needs at least one key")
+      }
+      for key in keys {
+        validate_key(key)
+      }
+    }
+    Delete(key~) => validate_key(key)
+    Incr(key~, ..) => validate_key(key)
+    Decr(key~, ..) => validate_key(key)
+    Quit => ()
   }
 }

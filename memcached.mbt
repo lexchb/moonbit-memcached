@@ -268,7 +268,9 @@ fn decode_value_blocks(
   pos : Int,
   values : Array[RetrievedValue],
 ) -> (Response, Int)? raise ProtocolError {
-  guard pos + header.size + 2 <= bytes.length() else { return None }
+  guard pos <= bytes.length() else { return None }
+  let remaining = bytes.length() - pos
+  guard remaining >= 2 && header.size <= remaining - 2 else { return None }
   guard bytes.view(start=pos + header.size).has_prefix(b"\r\n") else {
     raise Malformed(
       "data block of key '\{header.key}' is not terminated by CRLF",
