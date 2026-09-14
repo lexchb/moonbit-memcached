@@ -15,7 +15,7 @@ pub struct Client {
 ///|
 /// Wrap an open connection.
 pub fn Client::new(conn : &Connection) -> Client {
-  { conn, decoder: Decoder::new(), }
+  { conn, decoder: Decoder::new() }
 }
 
 ///|
@@ -162,9 +162,9 @@ pub fn Client::decr(
 /// leak it; the send error is re-raised afterwards.
 pub fn Client::quit(self : Client) -> Unit raise {
   self.conn.write(Request::Quit.to_bytes().view()) catch {
-    err => {
+    TransportError::Io(message) => {
       self.conn.close()
-      raise err
+      raise TransportError::Io(message)
     }
   }
   self.conn.close()
