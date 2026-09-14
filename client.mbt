@@ -161,8 +161,12 @@ pub fn Client::decr(
 /// closed even when the command cannot be written, so a failed send does not
 /// leak it; the send error is re-raised afterwards.
 pub fn Client::quit(self : Client) -> Unit raise {
-  errdefer self.conn.close()
-  self.conn.write(Request::Quit.to_bytes().view())
+  self.conn.write(Request::Quit.to_bytes().view()) catch {
+    err => {
+      self.conn.close()
+      raise err
+    }
+  }
   self.conn.close()
 }
 
