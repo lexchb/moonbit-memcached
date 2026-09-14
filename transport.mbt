@@ -6,7 +6,10 @@
 
 ///|
 /// Failure raised while moving bytes to or from the server.
-pub suberror TransportError {
+///
+/// The variants stay constructible outside the package: a `Connection`
+/// implementation living in another package has to be able to raise them.
+pub(all) suberror TransportError {
   /// The underlying channel failed, e.g. it was reset or ended early.
   Io(String)
 } derive(@debug.Debug)
@@ -43,7 +46,7 @@ pub struct ScriptedConnection {
 /// Each element is handed out by a separate read (truncated to the requested
 /// size), which makes it easy to force the client through partial responses.
 pub fn ScriptedConnection::new(chunks : Array[Bytes]) -> ScriptedConnection {
-  { chunks, index: 0, pending: Bytes::new(0), written: @buffer.Buffer(), }
+  { chunks, index: 0, pending: Bytes::new(0), written: @buffer.Buffer() }
 }
 
 ///|
