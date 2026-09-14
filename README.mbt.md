@@ -213,8 +213,9 @@ Client { conn : &Connection, decoder : Decoder }
 | `incr(key, delta)` / `decr(key, delta)` | `incr` / `decr` | `UInt64`（执行后的值） |
 | `quit()` | `quit` | `Unit` |
 
-`quit` 的语义单独说明：服务器对 `quit` **不回复**，所以这里只写不读；连接用
-`errdefer self.conn.close()` 保护，即使写失败也会关闭，避免连接泄漏，随后再把写错误抛出去。
+`quit` 的语义单独说明：服务器对 `quit` **不回复**，所以这里只写不读。连接关闭用 postfix
+`catch` 兜底：`write` 失败时先 `self.conn.close()` 再把错误重新抛出，写成功时在函数末尾
+关闭，两种情况都不会泄漏连接。
 
 ## 七、请求校验
 
