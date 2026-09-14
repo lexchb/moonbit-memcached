@@ -14,7 +14,7 @@ pub suberror ProtocolError {
   Malformed(String)
 } derive(@debug.Debug)
 
-pub suberror TransportError {
+pub(all) suberror TransportError {
   Io(String)
 } derive(@debug.Debug)
 
@@ -112,3 +112,4 @@ pub(open) trait Connection {
   fn read(Self, Int) -> Bytes raise TransportError
   fn close(Self) -> Unit raise TransportError
 }
+

@@ -324,7 +324,7 @@ pub struct Decoder {
 
 ///|
 pub fn Decoder::new() -> Decoder {
-  { buffer: Bytes::new(0), }
+  { buffer: Bytes::new(0) }
 }
 
 ///|
