@@ -384,3 +384,44 @@ test "an oversized byte count waits for more data instead of misframing" {
   assert_true(decoder.next() is None)
   assert_true(decoder.buffered() == 29)
 }
+
+///|
+/// A connection whose writes always fail, used to probe send-error cleanup.
+struct FailingWriteConnection {
+  mut closed : Bool
+}
+
+///|
+impl @memcached.Connection for FailingWriteConnection with fn write(self, _data) {
+  ignore(self)
+  raise @memcached.TransportError::Io("write failed")
+}
+
+///|
+impl @memcached.Connection for FailingWriteConnection with fn read(self, _max) {
+  ignore(self)
+  b""
+}
+
+///|
+impl @memcached.Connection for FailingWriteConnection with fn close(self) {
+  self.closed = true
+}
+
+///|
+test "quit releases the connection when the command cannot be written" {
+  let connection : FailingWriteConnection = { closed: false }
+  let client = @memcached.Client::new(connection)
+  let outcome = try {
+    client.quit()
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.TransportError::Io(_) => "io"
+        _ => "other"
+      }
+  }
+  assert_true(outcome == "io")
+  assert_true(connection.closed)
+}
