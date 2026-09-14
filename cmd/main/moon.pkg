@@ -2,4 +2,6 @@ import {
   "username/memcached" @lib,
 }
 
-pkgtype(kind: "executable")
+options(
+  "is-main": true,
+)
