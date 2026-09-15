@@ -1,3 +1,8 @@
 #!/bin/sh
 
+# Stop at the first failing check: without this, a failing `moon check` would
+# be masked by a passing `moon test`, and the commit would go through.
+set -e
+
 moon check
+moon test
