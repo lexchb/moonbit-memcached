@@ -585,3 +585,27 @@ set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这�
 
 若要接真实网络，只需给 socket 实现 `Connection`：`read` 在无数据时阻塞，返回空表示对端关闭，
 其余逻辑无需改动。
+
+
+**边界与后续规划**
+
+当前已明确记录并接受以下边界，作为后续扩展范围：
+
+- **未实现流水线**：`execute` 一次只发一个请求、等一个响应；解码器已具备多发多收的能力，后续
+  可在此之上新增批处理 API；
+
+- **`noreply` 的错误会错位**：服务器对 `noreply` 命令仍可能返回错误行，`send` 不读这些字节，
+  它们会被下一条 `execute` 当成自己的响应；需要严格的错误归属时改用 `execute`；
+
+- **有字节上限，没有时间上限**：`Connection::read` 阻塞多久完全由实现决定，本库不做超时；
+  服务端若配置了比当前上限更大的单条 item 上限，需要用 `Decoder::with_limit` /
+  `Client::with_limit` 放宽；
+
+- **仍未覆盖的协议**：二进制协议、meta 协议（`mg` / `ms` / `md` / `ma`）、SASL 认证、UDP 传输、
+  压缩值等均不支持；
+
+- **便捷方法不透传 flags / exptime**：`set` / `add` / `replace` / `append` / `prepend` / `cas`
+  固定 `flags=0, exptime=0`，需要其它取值请直接用 `store`。
+
+后续按以下方向推进：补上真实 socket 的 `Connection` 实现与连接池示例；增加流水线批处理 API；
+扩展 `stats` 之外的管理类子命令；视需要在保持三层结构不变的前提下接入更完整的协议特性。
