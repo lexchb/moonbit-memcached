@@ -49,6 +49,7 @@ fn reaction(input : Bytes) -> String {
             @memcached.RemoteErrorKind::Server => "server"
           }
         @memcached.ProtocolError::Malformed(_) => "malformed"
+        @memcached.ProtocolError::Desynchronised(_, _) => "desynchronised"
       }
   }
 }
@@ -95,6 +96,7 @@ test "storage request encodes the command line and the data block" {
     exptime=60,
     value=b"bar",
     cas=None,
+    noreply=false,
   )
   assert_true(request.to_bytes() == b"set foo 7 60 3\r\nbar\r\n")
 }
@@ -108,6 +110,7 @@ test "cas request appends the compare-and-swap token" {
     exptime=0,
     value=b"bar",
     cas=Some(42UL),
+    noreply=false,
   )
   assert_true(request.to_bytes() == b"cas foo 0 0 3 42\r\nbar\r\n")
 }
@@ -121,6 +124,7 @@ test "an empty value still encodes a zero-length data block" {
     exptime=0,
     value=b"",
     cas=None,
+    noreply=false,
   )
   assert_true(request.to_bytes() == b"set empty 0 0 0\r\n\r\n")
 }
@@ -141,20 +145,101 @@ test "get and gets encode the key list" {
 
 ///|
 test "delete, incr, decr and quit encode their arguments" {
-  let delete : @memcached.Request = @memcached.Request::Delete(key="foo")
+  let delete : @memcached.Request = @memcached.Request::Delete(
+    key="foo",
+    noreply=false,
+  )
   let incr : @memcached.Request = @memcached.Request::Incr(
     key="counter",
     delta=3UL,
+    noreply=false,
   )
   let decr : @memcached.Request = @memcached.Request::Decr(
     key="counter",
     delta=3UL,
+    noreply=false,
   )
   let quit : @memcached.Request = @memcached.Request::Quit
   assert_true(delete.to_bytes() == b"delete foo\r\n")
   assert_true(incr.to_bytes() == b"incr counter 3\r\n")
   assert_true(decr.to_bytes() == b"decr counter 3\r\n")
   assert_true(quit.to_bytes() == b"quit\r\n")
+}
+
+///|
+test "touch, gat and gats encode their exptime ahead of the keys" {
+  let touch : @memcached.Request = @memcached.Request::Touch(
+    key="foo",
+    exptime=30,
+    noreply=false,
+  )
+  let gat : @memcached.Request = @memcached.Request::Gat(
+    keys=["foo", "bar"],
+    exptime=30,
+    with_cas=false,
+  )
+  let gats : @memcached.Request = @memcached.Request::Gat(
+    keys=["foo"],
+    exptime=0,
+    with_cas=true,
+  )
+  assert_true(touch.to_bytes() == b"touch foo 30\r\n")
+  assert_true(gat.to_bytes() == b"gat 30 foo bar\r\n")
+  assert_true(gats.to_bytes() == b"gats 0 foo\r\n")
+}
+
+///|
+test "the administrative commands encode their optional arguments" {
+  let version : @memcached.Request = @memcached.Request::Version
+  let stats : @memcached.Request = @memcached.Request::Stats(sub=None)
+  let stats_items : @memcached.Request = @memcached.Request::Stats(
+    sub=Some("items"),
+  )
+  let flush_now : @memcached.Request = @memcached.Request::FlushAll(
+    delay=None,
+    noreply=false,
+  )
+  let flush_later : @memcached.Request = @memcached.Request::FlushAll(
+    delay=Some(10),
+    noreply=false,
+  )
+  let verbosity : @memcached.Request = @memcached.Request::Verbosity(
+    level=2,
+    noreply=false,
+  )
+  assert_true(version.to_bytes() == b"version\r\n")
+  assert_true(stats.to_bytes() == b"stats\r\n")
+  assert_true(stats_items.to_bytes() == b"stats items\r\n")
+  assert_true(flush_now.to_bytes() == b"flush_all\r\n")
+  assert_true(flush_later.to_bytes() == b"flush_all 10\r\n")
+  assert_true(verbosity.to_bytes() == b"verbosity 2\r\n")
+}
+
+///|
+test "noreply is appended last and suppresses the expected reply" {
+  let storage : @memcached.Request = @memcached.Request::Storage(
+    op=@memcached.StorageOp::Set,
+    key="foo",
+    flags=0,
+    exptime=0,
+    value=b"bar",
+    cas=None,
+    noreply=true,
+  )
+  let delete : @memcached.Request = @memcached.Request::Delete(
+    key="foo",
+    noreply=true,
+  )
+  let flush : @memcached.Request = @memcached.Request::FlushAll(
+    delay=Some(5),
+    noreply=true,
+  )
+  assert_true(storage.to_bytes() == b"set foo 0 0 3 noreply\r\nbar\r\n")
+  assert_true(delete.to_bytes() == b"delete foo noreply\r\n")
+  assert_true(flush.to_bytes() == b"flush_all 5 noreply\r\n")
+  assert_true(!storage.expects_reply())
+  assert_true(!delete.expects_reply())
+  assert_true(!flush.expects_reply())
 }
 
 ///|
@@ -165,6 +250,59 @@ test "terminal status lines decode to their status" {
   assert_true(decode_status(b"NOT_FOUND\r\n") == @memcached.Status::NotFound)
   assert_true(decode_status(b"DELETED\r\n") == @memcached.Status::Deleted)
   assert_true(decode_status(b"TOUCHED\r\n") == @memcached.Status::Touched)
+  assert_true(decode_status(b"OK\r\n") == @memcached.Status::Ok)
+}
+
+///|
+test "a version reply decodes to its version string" {
+  match decode(b"VERSION 1.6.21\r\n") {
+    @memcached.Response::Version(version) => assert_true(version == "1.6.21")
+    _ => abort("expected a version response")
+  }
+}
+
+///|
+test "a stats reply decodes every STAT line up to END" {
+  match
+    decode(
+      b"STAT pid 1234\r\nSTAT libevent 2.1.12-stable\r\nSTAT items:1:number 2\r\nEND\r\n",
+    ) {
+    @memcached.Response::Stats(entries) => {
+      assert_true(entries.length() == 3)
+      assert_true(entries[0].name == "pid")
+      assert_true(entries[0].value == "1234")
+      assert_true(entries[1].name == "libevent")
+      assert_true(entries[1].value == "2.1.12-stable")
+      assert_true(entries[2].name == "items:1:number")
+      assert_true(entries[2].value == "2")
+    }
+    _ => abort("expected a stats response")
+  }
+}
+
+///|
+test "a truncated version reply waits for the rest of the line" {
+  let decoder = @memcached.Decoder::new()
+  decoder.feed(b"VERSION 1.6")
+  assert_true(decoder.next() is None)
+  decoder.feed(b".21\r\n")
+  match decoder.next() {
+    Some(@memcached.Response::Version(version)) =>
+      assert_true(version == "1.6.21")
+    _ => abort("expected a version response")
+  }
+}
+
+///|
+test "stats lines without a value are rejected" {
+  assert_true(reaction(b"STAT noseparator\r\nEND\r\n") == "malformed")
+  assert_true(reaction(b"STAT \r\nEND\r\n") == "malformed")
+}
+
+///|
+test "a stats block that never ends waits for more data" {
+  assert_true(reaction(b"STAT pid 1\r\n") == "accepted")
+  assert_true(reaction(b"STAT pid 1\r\nSTA") == "accepted")
 }
 
 ///|
@@ -293,6 +431,102 @@ test "client counter commands return the new value" {
 }
 
 ///|
+test "client touch, gat and gats drive their commands" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"TOUCHED\r\n", b"VALUE foo 0 3\r\nbar\r\nEND\r\n", b"END\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  assert_true(client.touch("foo", 30) == @memcached.Status::Touched)
+  let hits = client.gat(["foo"], 30)
+  assert_true(hits.length() == 1)
+  assert_true(hits[0].data == b"bar")
+  assert_true(client.gats(["nope"], 30).length() == 0)
+  assert_true(
+    connection.written() == b"touch foo 30\r\ngat 30 foo\r\ngats 30 nope\r\n",
+  )
+}
+
+///|
+test "client reads the version and the statistics" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"VERSION 1.6.21\r\nSTAT pid 1234\r\nEND\r\n", b"STAT items:1:number 2\r\nEND\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  assert_true(client.version() == "1.6.21")
+  let stats = client.stats()
+  assert_true(stats.length() == 1)
+  assert_true(stats[0].name == "pid")
+  assert_true(stats[0].value == "1234")
+  let items = client.stats_of("items")
+  assert_true(items.length() == 1)
+  assert_true(items[0].name == "items:1:number")
+  assert_true(connection.written() == b"version\r\nstats\r\nstats items\r\n")
+}
+
+///|
+test "client flush_all and verbosity read the OK acknowledgement" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"OK\r\n", b"OK\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  assert_true(client.flush_all(None) == @memcached.Status::Ok)
+  assert_true(client.verbosity(2) == @memcached.Status::Ok)
+  assert_true(connection.written() == b"flush_all\r\nverbosity 2\r\n")
+}
+
+///|
+test "client send writes a noreply command without reading an answer" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([],
+  )
+  let client = @memcached.Client::new(connection)
+  client.send(@memcached.Request::Delete(key="quiet", noreply=true))
+  assert_true(connection.written() == b"delete quiet noreply\r\n")
+}
+
+///|
+test "a command without a reply cannot be executed" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"STORED\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  let outcome = try {
+    let _ = client.execute(@memcached.Request::Quit)
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+  assert_true(outcome == "malformed")
+  assert_true(connection.written() == b"")
+}
+
+///|
+test "a command that has a reply cannot be sent blind" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([],
+  )
+  let client = @memcached.Client::new(connection)
+  let outcome = try {
+    client.send(@memcached.Request::Version)
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+  assert_true(outcome == "malformed")
+  assert_true(connection.written() == b"")
+}
+
+///|
 test "client quit writes the quit command" {
   let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([],
   )
@@ -383,6 +617,94 @@ test "an oversized byte count waits for more data instead of misframing" {
   decoder.feed(b"VALUE k 0 1000000\r\nbar\r\nEND\r\n")
   assert_true(decoder.next() is None)
   assert_true(decoder.buffered() == 29)
+}
+
+///|
+test "a stream that never frames is refused instead of buffered forever" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"VALUE foo 0 1000000\r\n",
+    ],
+  )
+  let client = @memcached.Client::with_limit(connection, 16)
+  let outcome = try {
+    let _ = client.get(["foo"])
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        @memcached.ProtocolError::Desynchronised(_, _) => "desynchronised"
+        _ => "other"
+      }
+  }
+  // A 16-byte decoder can never hold a million-byte block, and the header says
+  // so on its own, so the block is named as the fault instead of the buffer
+  // being filled up first and the stream called lost afterwards.
+  assert_true(outcome == "malformed")
+}
+
+///|
+/// Describe how a decoder with `limit` bytes of room reacts to `input`:
+/// `"accepted"` when a response came out, `"none"` while it keeps waiting for
+/// more bytes, `"<limit>/<buffered>"` when it declares the stream out of sync,
+/// or `"malformed"` when it refuses the bytes instead of waiting for the rest.
+fn limited_reaction(limit : Int, input : Bytes) -> String {
+  let decoder = @memcached.Decoder::with_limit(limit)
+  decoder.feed(input.view())
+  try {
+    match decoder.next() {
+      Some(_) => "accepted"
+      None => "none"
+    }
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Desynchronised(cap, buffered) =>
+          "\{cap}/\{buffered}"
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+}
+
+///|
+test "a decoder with no room still decodes a whole response" {
+  // The cap is only consulted while the decoder is waiting, so a response that
+  // is already complete comes out of a decoder of any size.
+  assert_true(limited_reaction(0, b"STORED\r\n") == "accepted")
+  // A prefix has no room to wait in, and the error names the cap it broke.
+  assert_true(limited_reaction(0, b"STORED") == "0/6")
+}
+
+///|
+test "the buffer cap is inclusive, so a full buffer may still wait" {
+  assert_true(limited_reaction(8, b"12345678") == "none")
+  assert_true(limited_reaction(8, b"123456789") == "8/9")
+}
+
+///|
+test "a block larger than the limit is refused without filling the buffer" {
+  // The header alone says the block can never arrive whole in this decoder, so
+  // even a decoder with no room at all reports the block rather than waiting
+  // for a cap it would break anyway.
+  assert_true(
+    limited_reaction(0, b"VALUE k 0 1\r\nx\r\nEND\r\n") == "malformed",
+  )
+  assert_true(limited_reaction(64, b"VALUE k 0 100\r\nabc") == "malformed")
+  // A declaration the limit can hold is a block still on its way, not a fault.
+  assert_true(limited_reaction(128, b"VALUE k 0 100\r\nabc") == "none")
+}
+
+///|
+test "a client limit that fits its replies leaves the client working" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"STORED\r\n", b"VALUE foo 0 3\r\nbar\r\nEND\r\n",
+    ],
+  )
+  let client = @memcached.Client::with_limit(connection, 64)
+  assert_true(client.set("foo", b"bar") == @memcached.Status::Stored)
+  assert_true(client.get(["foo"])[0].data == b"bar")
+  assert_true(connection.written() == b"set foo 0 0 3\r\nbar\r\nget foo\r\n")
 }
 
 ///|
