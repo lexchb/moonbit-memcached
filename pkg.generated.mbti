@@ -12,6 +12,7 @@ import {
 pub suberror ProtocolError {
   Remote(RemoteErrorKind, String)
   Malformed(String)
+  Desynchronised(Int, Int)
 } derive(@debug.Debug)
 
 pub(all) suberror TransportError {
@@ -29,6 +30,9 @@ pub fn Client::cas(Self, String, Bytes, UInt64) -> Status raise
 pub fn Client::decr(Self, String, UInt64) -> UInt64 raise
 pub fn Client::delete(Self, String) -> Status raise
 pub fn Client::execute(Self, Request) -> Response raise
+pub fn Client::flush_all(Self, Int?) -> Status raise
+pub fn Client::gat(Self, Array[String], Int) -> Array[RetrievedValue] raise
+pub fn Client::gats(Self, Array[String], Int) -> Array[RetrievedValue] raise
 pub fn Client::get(Self, Array[String]) -> Array[RetrievedValue] raise
 pub fn Client::gets(Self, Array[String]) -> Array[RetrievedValue] raise
 pub fn Client::incr(Self, String, UInt64) -> UInt64 raise
@@ -36,16 +40,27 @@ pub fn Client::new(&Connection) -> Self
 pub fn Client::prepend(Self, String, Bytes) -> Status raise
 pub fn Client::quit(Self) -> Unit raise
 pub fn Client::replace(Self, String, Bytes) -> Status raise
+pub fn Client::send(Self, Request) -> Unit raise
 pub fn Client::set(Self, String, Bytes) -> Status raise
+pub fn Client::stats(Self) -> Array[StatEntry] raise
+pub fn Client::stats_of(Self, String) -> Array[StatEntry] raise
 pub fn Client::store(Self, StorageOp, String, Bytes, Int, Int, UInt64?) -> Status raise
+pub fn Client::touch(Self, String, Int) -> Status raise
+pub fn Client::verbosity(Self, Int) -> Status raise
+pub fn Client::version(Self) -> String raise
+pub fn Client::with_limit(&Connection, Int) -> Self
 
 pub struct Decoder {
   mut buffer : Bytes
+  limit : Int
 }
 pub fn Decoder::buffered(Self) -> Int
 pub fn Decoder::feed(Self, BytesView) -> Unit
+pub fn Decoder::limit(Self) -> Int
 pub fn Decoder::new() -> Self
 pub fn Decoder::next(Self) -> Response? raise ProtocolError
+pub fn Decoder::resync(Self) -> Unit
+pub fn Decoder::with_limit(Int) -> Self
 
 pub enum RemoteErrorKind {
   Generic
@@ -54,19 +69,28 @@ pub enum RemoteErrorKind {
 } derive(Eq, @debug.Debug)
 
 pub(all) enum Request {
-  Storage(op~ : StorageOp, key~ : String, flags~ : Int, exptime~ : Int, value~ : Bytes, cas~ : UInt64?)
+  Storage(op~ : StorageOp, key~ : String, flags~ : Int, exptime~ : Int, value~ : Bytes, cas~ : UInt64?, noreply~ : Bool)
   Get(keys~ : Array[String], with_cas~ : Bool)
-  Delete(key~ : String)
-  Incr(key~ : String, delta~ : UInt64)
-  Decr(key~ : String, delta~ : UInt64)
+  Gat(keys~ : Array[String], exptime~ : Int, with_cas~ : Bool)
+  Delete(key~ : String, noreply~ : Bool)
+  Incr(key~ : String, delta~ : UInt64, noreply~ : Bool)
+  Decr(key~ : String, delta~ : UInt64, noreply~ : Bool)
+  Touch(key~ : String, exptime~ : Int, noreply~ : Bool)
+  Version
+  Stats(sub~ : String?)
+  FlushAll(delay~ : Int?, noreply~ : Bool)
+  Verbosity(level~ : Int, noreply~ : Bool)
   Quit
 } derive(Eq, @debug.Debug)
+pub fn Request::expects_reply(Self) -> Bool
 pub fn Request::to_bytes(Self) -> Bytes
 
 pub enum Response {
   Values(Array[RetrievedValue])
   Status(Status)
   Counter(UInt64)
+  Version(String)
+  Stats(Array[StatEntry])
 } derive(Eq, @debug.Debug)
 
 pub struct RetrievedValue {
@@ -86,6 +110,11 @@ pub fn ScriptedConnection::new(Array[Bytes]) -> Self
 pub fn ScriptedConnection::written(Self) -> Bytes
 pub impl Connection for ScriptedConnection
 
+pub struct StatEntry {
+  name : String
+  value : String
+} derive(Eq, @debug.Debug)
+
 pub(all) enum Status {
   Stored
   NotStored
@@ -93,6 +122,7 @@ pub(all) enum Status {
   NotFound
   Deleted
   Touched
+  Ok
 } derive(Eq, @debug.Debug)
 
 pub(all) enum StorageOp {

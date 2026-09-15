@@ -28,8 +28,10 @@ fn status_name(status : @lib.Status) -> String {
     "NOT_FOUND"
   } else if status == @lib.Status::Deleted {
     "DELETED"
-  } else {
+  } else if status == @lib.Status::Touched {
     "TOUCHED"
+  } else {
+    "OK"
   }
 }
 
@@ -52,6 +54,7 @@ fn run() -> Unit raise {
     exptime=0,
     value=b"bar",
     cas=None,
+    noreply=false,
   )
   println("set  -> \{render(set_request.to_bytes())}")
   let gets_request : @lib.Request = @lib.Request::Get(
@@ -59,8 +62,27 @@ fn run() -> Unit raise {
     with_cas=true,
   )
   println("gets -> \{render(gets_request.to_bytes())}")
-  let delete_request : @lib.Request = @lib.Request::Delete(key="foo")
+  let delete_request : @lib.Request = @lib.Request::Delete(
+    key="foo",
+    noreply=false,
+  )
   println("del  -> \{render(delete_request.to_bytes())}")
+  let gat_request : @lib.Request = @lib.Request::Gat(
+    keys=["foo"],
+    exptime=30,
+    with_cas=false,
+  )
+  println("gat  -> \{render(gat_request.to_bytes())}")
+  let quiet_delete : @lib.Request = @lib.Request::Delete(
+    key="foo",
+    noreply=true,
+  )
+  println("del! -> \{render(quiet_delete.to_bytes())}")
+  let stats_request : @lib.Request = @lib.Request::Stats(sub=Some("items"))
+  println("stat -> \{render(stats_request.to_bytes())}")
+  println(
+    "flush-> \{render(@lib.Request::FlushAll(delay=Some(10), noreply=false).to_bytes())}",
+  )
 
   println("")
   println("== single-connection client ==")
@@ -77,6 +99,21 @@ fn run() -> Unit raise {
     )
   }
   println("wire -> \{render(connection.written())}")
+
+  println("")
+  println("== noreply and administrative commands ==")
+  let admin = @lib.ScriptedConnection::new([
+    b"VERSION 1.6.21\r\nSTAT curr_items 2\r\nSTAT version 1.6.21\r\nEND\r\n", b"OK\r\n",
+  ])
+  let admin_client = @lib.Client::new(admin)
+  println("version -> \{admin_client.version()}")
+  let stats = admin_client.stats()
+  for entry in stats {
+    println("stat    -> \{entry.name} = \{entry.value}")
+  }
+  println("flush   -> \{status_name(admin_client.flush_all(None))}")
+  admin_client.send(@lib.Request::Delete(key="gone", noreply=true))
+  println("wire -> \{render(admin.written())}")
 
   println("")
   println("== incremental decoding ==")
