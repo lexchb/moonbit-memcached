@@ -1,4 +1,4 @@
-# username/memcached
+# lexchb/memcached
 
 用 MoonBit 实现的 **memcached 文本协议（text protocol）客户端库**。
 
@@ -6,7 +6,7 @@
 传输通道被抽象成一个 `Connection` trait，因此整个包不依赖任何 socket，可以在没有 memcached
 服务端的环境下完整地编码、解码与测试。
 
-- 模块名：`username/memcached`，版本 `0.1.0`
+- 模块名：`lexchb/memcached`，版本 `0.1.0`
 - 首选编译目标：`wasm-gc`
 - 依赖：仅 `moonbitlang/core` 的 `buffer`、`debug`、`encoding/utf8`、`string`
 

@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "username/memcached/cmd/main"
+package "lexchb/memcached/cmd/main"
 
 // Values
 
