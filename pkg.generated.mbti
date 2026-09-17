@@ -24,9 +24,9 @@ pub struct Client {
   conn : &Connection
   decoder : Decoder
 }
-pub fn Client::add(Self, String, Bytes) -> Status raise
-pub fn Client::append(Self, String, Bytes) -> Status raise
-pub fn Client::cas(Self, String, Bytes, UInt64) -> Status raise
+pub fn Client::add(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
+pub fn Client::append(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
+pub fn Client::cas(Self, String, Bytes, UInt64, flags? : Int, exptime? : Int) -> Status raise
 pub fn Client::decr(Self, String, UInt64) -> UInt64 raise
 pub fn Client::delete(Self, String) -> Status raise
 pub fn Client::execute(Self, Request) -> Response raise
@@ -37,11 +37,11 @@ pub fn Client::get(Self, Array[String]) -> Array[RetrievedValue] raise
 pub fn Client::gets(Self, Array[String]) -> Array[RetrievedValue] raise
 pub fn Client::incr(Self, String, UInt64) -> UInt64 raise
 pub fn Client::new(&Connection) -> Self
-pub fn Client::prepend(Self, String, Bytes) -> Status raise
+pub fn Client::prepend(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
 pub fn Client::quit(Self) -> Unit raise
-pub fn Client::replace(Self, String, Bytes) -> Status raise
+pub fn Client::replace(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
 pub fn Client::send(Self, Request) -> Unit raise
-pub fn Client::set(Self, String, Bytes) -> Status raise
+pub fn Client::set(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
 pub fn Client::stats(Self) -> Array[StatEntry] raise
 pub fn Client::stats_of(Self, String) -> Array[StatEntry] raise
 pub fn Client::store(Self, StorageOp, String, Bytes, Int, Int, UInt64?) -> Status raise

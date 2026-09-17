@@ -358,8 +358,8 @@ Client { conn : &Connection, decoder : Decoder }
 | 方法 | 命令 | 返回值 |
 | --- | --- | --- |
 | `store(op, key, value, flags, exptime, cas)` | 任意存储命令（可指定 flags / 过期时间 / CAS） | `Status` |
-| `set` / `add` / `replace` / `append` / `prepend` | 对应存储命令，`flags=0, exptime=0, cas=None` | `Status` |
-| `cas(key, value, cas)` | `cas`，带上期望令牌 | `Status` |
+| `set` / `add` / `replace` / `append` / `prepend` | 对应存储命令；`flags` / `exptime` 以同名可选参数透传，默认 `0` | `Status` |
+| `cas(key, value, cas)` | `cas`，带上期望令牌；同样接受可选的 `flags` / `exptime` | `Status` |
 | `get(keys)` / `gets(keys)` | `get` / `gets` | `Array[RetrievedValue]` |
 | `gat(keys, exptime)` / `gats(keys, exptime)` | `gat` / `gats`，取回的同时把过期时间重置 | `Array[RetrievedValue]` |
 | `delete(key)` | `delete` | `Status` |
@@ -452,7 +452,7 @@ trait Connection {
 
 ## 九、测试与示例
 
-两个套件都不需要 memcached 服务端，`moon test` 共 72 个用例（黑盒 45 + 白盒 27）。
+两个套件都不需要 memcached 服务端，`moon test` 共 73 个用例（黑盒 46 + 白盒 27）。
 
 ### 黑盒测试（`memcached_test.mbt`）
 
@@ -466,7 +466,8 @@ trait Connection {
   `VERSION` 行、`STAT` 块（含无值的 STAT 行被拒、`END` 前未结束则继续等待、只收到半行
   `VERSION` 时等待）、数据块以字节数定帧（值内含 `\r\n`）、响应跨 feed 重组、单次 feed
   多响应、服务器错误的三种类别、非法帧（未知行、字段数不对、数据块未以 CRLF 结尾）；
-- **客户端**：单连接上 set + get 的完整往返与线上字节断言、cas 透传令牌、计数器返回值、
+- **客户端**：单连接上 set + get 的完整往返与线上字节断言、cas 透传令牌、便捷存储方法透传
+  flags/exptime（线上字节逐字节断言）、计数器返回值、
   `touch`/`gat`/`gats` 往返、`version` 与 `stats` 的取值、`flush_all`/`verbosity` 读回 `OK`、
   `send` 写出 `noreply` 命令且**一个字节都不读**、有应答的命令不能 `send`、无应答的命令不能
   `execute`、`quit`（含写入失败时仍释放连接）、响应中途断连报 `TransportError::Io`、
@@ -555,8 +556,6 @@ set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这�
   一起装进缓冲区，装不下的声明会因为永远等不到数据而**当场**判为 `Malformed`（见第五节）。
   因此服务端若配置了比当前上限更大的单条 item 上限，默认配置下本库无法表达——需要放宽带块时
   用 `Decoder::with_limit` / `Client::with_limit`。
-- **便捷方法不透传 flags/exptime**：`set`/`add`/`replace`/`append`/`prepend`/`cas` 固定
-  `flags=0, exptime=0`；需要其它取值请直接用 `store`。
 - **仍未覆盖的协议**：二进制协议、meta 协议（`mg`/`ms`/`md`/`ma`）、SASL 认证、UDP 传输、
   压缩值等都不支持；文本协议这边的子命令形式只覆盖到 `stats [<section>]` 这一类
   （段名本身可带参数，如 `stats detail on`）。
@@ -606,10 +605,44 @@ set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这�
   `Client::with_limit` 放宽；
 
 - **仍未覆盖的协议**：二进制协议、meta 协议（`mg` / `ms` / `md` / `ma`）、SASL 认证、UDP 传输、
-  压缩值等均不支持；
-
-- **便捷方法不透传 flags / exptime**：`set` / `add` / `replace` / `append` / `prepend` / `cas`
-  固定 `flags=0, exptime=0`，需要其它取值请直接用 `store`。
+  压缩值等均不支持。
 
 后续按以下方向推进：补上真实 socket 的 `Connection` 实现与连接池示例；增加流水线批处理 API；
 扩展 `stats` 之外的管理类子命令；视需要在保持三层结构不变的前提下接入更完整的协议特性。
+
+## 扩展方向与难度
+
+### 短期：低成本、零架构风险
+
+| 方向 | 难度 | 评估 |
+| --- | --- | --- |
+| 管理类子命令（`cache_memlimit`、`slabs reassign` 等） | ★ 很低 | 文档第十一节的五步配方直接可用；响应多为状态行，`decode_status` 已覆盖；穷尽匹配强制补全 |
+| `Client::resync()` 便捷方法 | ★ 很低 | 目前失步后要碰 `client.decoder.resync()`，包一层即可，顺带可在文档里把恢复流程写死 |
+| 超时支持 | ★ 很低（本库侧） | `Connection::read` 的阻塞语义本就是实现定义，超时天然属于 socket 实现的 read timeout；本库只需文档说明。**不建议**在 API 里加截止时间参数，会污染三层结构 |
+| 压缩值 | ★★ 低 | 纯客户端变换：存前压缩 + flags 置标志位，取后按 flags 解压，协议零改动。唯一风险是 MoonBit 生态缺少现成 deflate/zlib 绑定 |
+
+### 中期：架构可承载，工作集中在一处
+
+| 方向 | 难度 | 评估 |
+| --- | --- | --- |
+| 流水线批处理 API | ★★ 低-中 | 解码侧零改动（`Decoder` 已具备多发多收）。工作在 client：写出 N 个请求后按 `expects_reply` 计数读回、按序配对。需要定义清楚的点：混入 `noreply` 时的计数规则、某条响应是 `Remote` 错误时是否继续收后续响应 |
+| 真实 socket `Connection` + 连接池 | ★★★ 中 | 本库零改动，难点全在外部：首选目标 wasm-gc 无 socket 能力，需切 native/JS 宿主或等待 async 生态成熟；连接池（checkout/checkin + 用 `version` 做健康探测）依赖 socket 先落地 |
+| meta 协议（`mg` / `ms` / `md` / `ma`） | ★★★ 中 | 同为文本行协议，可落在现有三层内：新增 `Request` 变体 + 响应类型（`HD` / `VA` / `EN` / `EX`…）+ `decode_response` 新分派分支。复杂度在 meta 响应的 flag token 语法比 `VALUE` 头丰富，解析工作量明显大于普通命令 |
+
+### 长期/重构级
+
+| 方向 | 难度 | 评估 |
+| --- | --- | --- |
+| 二进制协议（含 SASL） | ★★★★ 中高 | 24 字节定长头 + opaque 令牌配对，与文本协议分帧完全不同，等于新写一套 codec（传输层可复用）。收益：天然支持流水线乱序配对与 SASL。建议做成独立模块，不影响现有 API。注意 SASL 在文本协议中没有对应物，只能随二进制协议落地 |
+| UDP 传输 | — 建议移除 | memcached 自 1.6.0 起已删除 UDP 支持，投入无意义，建议从规划里划掉 |
+| `noreply` 错误错位 | 不可根治 | 文本协议层面无法把游离的错误行归属到具体命令，现有「改用 `execute`」就是正确缓解；根治只有二进制协议的 opaque |
+
+### 附带：一个不改 API 的内部优化
+
+`Decoder::feed` 每次 `Bytes::add` 全量拷贝缓冲区，高频喂入大块时有 O(n²) 累积风险；可改为滑动窗口 + 惰性压缩。难度 ★★，`.mbti` 不变，纯内部重构。
+
+### 建议路线
+
+`flags/exptime` 透传已完成（`set` / `add` / `replace` / `append` / `prepend` / `cas` 均接受可选的
+`flags` / `exptime`）。后续：`管理子命令 + Client::resync` → `流水线批处理`（收益最大、成本最低的
+一个）→ `socket + 连接池`（取决于 MoonBit 生态）→ `meta 协议` / `二进制协议`（按需）。UDP 从规划移除。

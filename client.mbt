@@ -132,55 +132,87 @@ pub fn Client::store(
 
 ///|
 /// `set`: store `value` under `key`, ignoring any existing value.
-pub fn Client::set(self : Client, key : String, value : Bytes) -> Status raise {
-  self.store(StorageOp::Set, key, value, 0, 0, None)
+///
+/// `flags` and `exptime` default to `0`; pass either to override.
+pub fn Client::set(
+  self : Client,
+  key : String,
+  value : Bytes,
+  flags? : Int = 0,
+  exptime? : Int = 0,
+) -> Status raise {
+  self.store(StorageOp::Set, key, value, flags, exptime, None)
 }
 
 ///|
 /// `add`: store `value` under `key` only if the key does not exist yet.
-pub fn Client::add(self : Client, key : String, value : Bytes) -> Status raise {
-  self.store(StorageOp::Add, key, value, 0, 0, None)
+///
+/// `flags` and `exptime` default to `0`; pass either to override.
+pub fn Client::add(
+  self : Client,
+  key : String,
+  value : Bytes,
+  flags? : Int = 0,
+  exptime? : Int = 0,
+) -> Status raise {
+  self.store(StorageOp::Add, key, value, flags, exptime, None)
 }
 
 ///|
 /// `replace`: store `value` under `key` only if the key already exists.
+///
+/// `flags` and `exptime` default to `0`; pass either to override.
 pub fn Client::replace(
   self : Client,
   key : String,
   value : Bytes,
+  flags? : Int = 0,
+  exptime? : Int = 0,
 ) -> Status raise {
-  self.store(StorageOp::Replace, key, value, 0, 0, None)
+  self.store(StorageOp::Replace, key, value, flags, exptime, None)
 }
 
 ///|
 /// `append`: append `value` to the item stored under `key`.
+///
+/// `flags` and `exptime` default to `0`; pass either to override.
 pub fn Client::append(
   self : Client,
   key : String,
   value : Bytes,
+  flags? : Int = 0,
+  exptime? : Int = 0,
 ) -> Status raise {
-  self.store(StorageOp::Append, key, value, 0, 0, None)
+  self.store(StorageOp::Append, key, value, flags, exptime, None)
 }
 
 ///|
 /// `prepend`: prepend `value` to the item stored under `key`.
+///
+/// `flags` and `exptime` default to `0`; pass either to override.
 pub fn Client::prepend(
   self : Client,
   key : String,
   value : Bytes,
+  flags? : Int = 0,
+  exptime? : Int = 0,
 ) -> Status raise {
-  self.store(StorageOp::Prepend, key, value, 0, 0, None)
+  self.store(StorageOp::Prepend, key, value, flags, exptime, None)
 }
 
 ///|
 /// `cas`: store `value` under `key` only if its CAS token is still `cas`.
+///
+/// `flags` and `exptime` default to `0`; pass either to override.
 pub fn Client::cas(
   self : Client,
   key : String,
   value : Bytes,
   cas : UInt64,
+  flags? : Int = 0,
+  exptime? : Int = 0,
 ) -> Status raise {
-  self.store(StorageOp::Cas, key, value, 0, 0, Some(cas))
+  self.store(StorageOp::Cas, key, value, flags, exptime, Some(cas))
 }
 
 ///|

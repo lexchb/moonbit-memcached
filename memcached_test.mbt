@@ -420,6 +420,25 @@ test "client cas forwards the expected token" {
 }
 
 ///|
+test "client storage conveniences forward flags and exptime" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"STORED\r\n", b"STORED\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  assert_true(
+    client.set("foo", b"bar", flags=7, exptime=60) == @memcached.Status::Stored,
+  )
+  assert_true(
+    client.cas("foo", b"bar", 42UL, exptime=30) == @memcached.Status::Stored,
+  )
+  assert_true(
+    connection.written() ==
+    b"set foo 7 60 3\r\nbar\r\ncas foo 0 30 3 42\r\nbar\r\n",
+  )
+}
+
+///|
 test "client counter commands return the new value" {
   let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
       b"11\r\n",
