@@ -26,6 +26,7 @@ pub struct Client {
 }
 pub fn Client::add(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
 pub fn Client::append(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
+pub fn Client::cache_memlimit(Self, Int) -> Status raise
 pub fn Client::cas(Self, String, Bytes, UInt64, flags? : Int, exptime? : Int) -> Status raise
 pub fn Client::decr(Self, String, UInt64) -> UInt64 raise
 pub fn Client::delete(Self, String) -> Status raise
@@ -40,8 +41,11 @@ pub fn Client::new(&Connection) -> Self
 pub fn Client::prepend(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
 pub fn Client::quit(Self) -> Unit raise
 pub fn Client::replace(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
+pub fn Client::resync(Self) -> Unit
 pub fn Client::send(Self, Request) -> Unit raise
 pub fn Client::set(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
+pub fn Client::slabs_automove(Self, Int) -> Status raise
+pub fn Client::slabs_reassign(Self, Int, Int) -> Status raise
 pub fn Client::stats(Self) -> Array[StatEntry] raise
 pub fn Client::stats_of(Self, String) -> Array[StatEntry] raise
 pub fn Client::store(Self, StorageOp, String, Bytes, Int, Int, UInt64?) -> Status raise
@@ -80,6 +84,9 @@ pub(all) enum Request {
   Stats(sub~ : String?)
   FlushAll(delay~ : Int?, noreply~ : Bool)
   Verbosity(level~ : Int, noreply~ : Bool)
+  CacheMemlimit(megabytes~ : Int, noreply~ : Bool)
+  SlabsReassign(src~ : Int, dst~ : Int, noreply~ : Bool)
+  SlabsAutomove(mode~ : Int, noreply~ : Bool)
   Quit
 } derive(Eq, @debug.Debug)
 pub fn Request::expects_reply(Self) -> Bool

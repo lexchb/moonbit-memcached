@@ -88,6 +88,26 @@ fn store_reaction(key : String) -> String {
 }
 
 ///|
+/// Describe how the client reacts to `request`: `"ok"` when it ran to
+/// completion, `"malformed"` when validation refused it before any byte went
+/// out.
+fn execute_outcome(
+  client : @memcached.Client,
+  request : @memcached.Request,
+) -> String {
+  try {
+    let _ = client.execute(request)
+    "ok"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+}
+
+///|
 test "storage request encodes the command line and the data block" {
   let request : @memcached.Request = @memcached.Request::Storage(
     op=@memcached.StorageOp::Set,
@@ -213,6 +233,34 @@ test "the administrative commands encode their optional arguments" {
   assert_true(flush_now.to_bytes() == b"flush_all\r\n")
   assert_true(flush_later.to_bytes() == b"flush_all 10\r\n")
   assert_true(verbosity.to_bytes() == b"verbosity 2\r\n")
+}
+
+///|
+test "cache_memlimit and the slabs commands encode their arguments" {
+  let memlimit : @memcached.Request = @memcached.Request::CacheMemlimit(
+    megabytes=64,
+    noreply=false,
+  )
+  let memlimit_quiet : @memcached.Request = @memcached.Request::CacheMemlimit(
+    megabytes=64,
+    noreply=true,
+  )
+  let reassign : @memcached.Request = @memcached.Request::SlabsReassign(
+    src=-1,
+    dst=2,
+    noreply=false,
+  )
+  let automove : @memcached.Request = @memcached.Request::SlabsAutomove(
+    mode=2,
+    noreply=true,
+  )
+  assert_true(memlimit.to_bytes() == b"cache_memlimit 64\r\n")
+  assert_true(memlimit_quiet.to_bytes() == b"cache_memlimit 64 noreply\r\n")
+  assert_true(reassign.to_bytes() == b"slabs reassign -1 2\r\n")
+  assert_true(automove.to_bytes() == b"slabs automove 2 noreply\r\n")
+  assert_true(memlimit.expects_reply())
+  assert_true(!memlimit_quiet.expects_reply())
+  assert_true(!automove.expects_reply())
 }
 
 ///|
@@ -497,6 +545,22 @@ test "client flush_all and verbosity read the OK acknowledgement" {
 }
 
 ///|
+test "client cache_memlimit and slabs commands read the OK acknowledgement" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"OK\r\n", b"OK\r\n", b"OK\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  assert_true(client.cache_memlimit(64) == @memcached.Status::Ok)
+  assert_true(client.slabs_reassign(-1, 2) == @memcached.Status::Ok)
+  assert_true(client.slabs_automove(2) == @memcached.Status::Ok)
+  assert_true(
+    connection.written() ==
+    b"cache_memlimit 64\r\nslabs reassign -1 2\r\nslabs automove 2\r\n",
+  )
+}
+
+///|
 test "client send writes a noreply command without reading an answer" {
   let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([],
   )
@@ -627,6 +691,35 @@ test "a retrieval without keys is rejected before anything is written" {
       }
   }
   assert_true(outcome == "malformed")
+  assert_true(connection.written() == b"")
+}
+
+///|
+test "invalid administrative arguments are rejected before anything is written" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([],
+  )
+  let client = @memcached.Client::new(connection)
+  assert_true(
+    execute_outcome(
+      client,
+      @memcached.Request::CacheMemlimit(megabytes=-1, noreply=false),
+    ) ==
+    "malformed",
+  )
+  assert_true(
+    execute_outcome(
+      client,
+      @memcached.Request::SlabsReassign(src=-2, dst=1, noreply=false),
+    ) ==
+    "malformed",
+  )
+  assert_true(
+    execute_outcome(
+      client,
+      @memcached.Request::SlabsAutomove(mode=3, noreply=false),
+    ) ==
+    "malformed",
+  )
   assert_true(connection.written() == b"")
 }
 
@@ -765,4 +858,27 @@ test "quit releases the connection when the command cannot be written" {
   }
   assert_true(outcome == "io")
   assert_true(connection.closed)
+}
+
+///|
+test "client resync lets a desynchronised connection resume" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"a fragment that never frames", b"STORED\r\n",
+    ],
+  )
+  let client = @memcached.Client::with_limit(connection, 8)
+  let outcome = try {
+    let _ = client.get(["foo"])
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Desynchronised(_, _) => "desynchronised"
+        _ => "other"
+      }
+  }
+  assert_true(outcome == "desynchronised")
+  client.resync()
+  assert_true(client.set("foo", b"bar") == @memcached.Status::Stored)
+  assert_true(connection.written() == b"get foo\r\nset foo 0 0 3\r\nbar\r\n")
 }

@@ -295,6 +295,30 @@ pub fn Client::verbosity(self : Client, level : Int) -> Status raise {
 }
 
 ///|
+/// `cache_memlimit <megabytes>`: cap the memory the server uses for items.
+pub fn Client::cache_memlimit(self : Client, megabytes : Int) -> Status raise {
+  expect_status(self.execute(Request::CacheMemlimit(megabytes~, noreply=false)))
+}
+
+///|
+/// `slabs reassign <src> <dst>`: move a slab page from class `src` to class
+/// `dst`. A `src` of `-1` lets the server pick the source slab itself.
+pub fn Client::slabs_reassign(
+  self : Client,
+  src : Int,
+  dst : Int,
+) -> Status raise {
+  expect_status(self.execute(Request::SlabsReassign(src~, dst~, noreply=false)))
+}
+
+///|
+/// `slabs automove <mode>`: set the slab automover - `0` off, `1` on,
+/// `2` aggressive.
+pub fn Client::slabs_automove(self : Client, mode : Int) -> Status raise {
+  expect_status(self.execute(Request::SlabsAutomove(mode~, noreply=false)))
+}
+
+///|
 /// `quit`: ask the server to hang up, then release the local channel.
 ///
 /// The server sends no reply to `quit`, so nothing is read back. The channel is
@@ -312,6 +336,18 @@ pub fn Client::quit(self : Client) -> Unit raise {
     }
   }
   self.conn.close()
+}
+
+///|
+/// Drop every byte the decoder still holds.
+///
+/// This is the client's handle on [`Decoder::resync`]: once a stream has lost
+/// its framing ([`ProtocolError::Desynchronised`]) and is known to have
+/// restarted - typically after a reconnect - the buffered fragment has to go
+/// before the next [`Client::execute`]. Calling it on a healthy stream
+/// discards bytes that were never consumed.
+pub fn Client::resync(self : Client) -> Unit {
+  self.decoder.resync()
 }
 
 ///|
@@ -485,6 +521,27 @@ fn validate_request(request : Request) -> Unit raise ProtocolError {
       if level < 0 {
         raise Malformed("verbosity level cannot be negative: \{level}")
       }
+    CacheMemlimit(megabytes~, ..) =>
+      if megabytes < 0 {
+        raise Malformed(
+          "cache_memlimit megabytes cannot be negative: \{megabytes}",
+        )
+      }
+    SlabsReassign(src~, dst~, ..) => {
+      // `-1` asks the server to pick the source slab itself; anything below
+      // is not a slab class at all.
+      guard src >= -1 else {
+        raise Malformed("slab class cannot be below -1: \{src}")
+      }
+      guard dst >= -1 else {
+        raise Malformed("slab class cannot be below -1: \{dst}")
+      }
+    }
+    SlabsAutomove(mode~, ..) => {
+      guard 0 <= mode && mode <= 2 else {
+        raise Malformed("slabs automove mode must be 0, 1 or 2: \{mode}")
+      }
+    }
     Version => ()
     Quit => ()
   }

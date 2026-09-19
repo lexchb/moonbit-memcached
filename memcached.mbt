@@ -87,6 +87,16 @@ pub(all) enum Request {
   FlushAll(delay~ : Int?, noreply~ : Bool)
   /// `verbosity <level> [noreply]`, answered with `OK`.
   Verbosity(level~ : Int, noreply~ : Bool)
+  /// `cache_memlimit <megabytes> [noreply]`, answered with `OK`.
+  CacheMemlimit(megabytes~ : Int, noreply~ : Bool)
+  /// `slabs reassign <src> <dst> [noreply]`, answered with `OK`.
+  ///
+  /// A `src` of `-1` lets the server pick the source slab itself.
+  SlabsReassign(src~ : Int, dst~ : Int, noreply~ : Bool)
+  /// `slabs automove <mode> [noreply]`, answered with `OK`.
+  ///
+  /// `mode` is `0` (off), `1` (on) or `2` (aggressive).
+  SlabsAutomove(mode~ : Int, noreply~ : Bool)
   /// `quit`.
   Quit
 } derive(Eq, @debug.Debug)
@@ -105,6 +115,9 @@ pub fn Request::expects_reply(self : Request) -> Bool {
     Touch(noreply~, ..) => !noreply
     FlushAll(noreply~, ..) => !noreply
     Verbosity(noreply~, ..) => !noreply
+    CacheMemlimit(noreply~, ..) => !noreply
+    SlabsReassign(noreply~, ..) => !noreply
+    SlabsAutomove(noreply~, ..) => !noreply
     Get(..) => true
     Gat(..) => true
     Version => true
@@ -261,6 +274,21 @@ pub fn Request::to_bytes(self : Request) -> Bytes {
     }
     Verbosity(level~, noreply~) => {
       buf.write_string_utf8("verbosity \{level}")
+      write_noreply(buf, noreply)
+      buf.write_bytes(b"\r\n")
+    }
+    CacheMemlimit(megabytes~, noreply~) => {
+      buf.write_string_utf8("cache_memlimit \{megabytes}")
+      write_noreply(buf, noreply)
+      buf.write_bytes(b"\r\n")
+    }
+    SlabsReassign(src~, dst~, noreply~) => {
+      buf.write_string_utf8("slabs reassign \{src} \{dst}")
+      write_noreply(buf, noreply)
+      buf.write_bytes(b"\r\n")
+    }
+    SlabsAutomove(mode~, noreply~) => {
+      buf.write_string_utf8("slabs automove \{mode}")
       write_noreply(buf, noreply)
       buf.write_bytes(b"\r\n")
     }

@@ -697,3 +697,51 @@ test "resync drops a fragment that lost its framing" {
   decoder.feed(b"STORED\r\n")
   assert_true(decoder.next() is Some(Response::Status(Status::Stored)))
 }
+
+///|
+test "request validation covers the administrative commands" {
+  assert_eq(
+    request_outcome(Request::CacheMemlimit(megabytes=64, noreply=false)),
+    "ok",
+  )
+  assert_eq(
+    request_outcome(Request::CacheMemlimit(megabytes=0, noreply=true)),
+    "ok",
+  )
+  assert_eq(
+    request_outcome(Request::CacheMemlimit(megabytes=-1, noreply=false)),
+    "malformed",
+  )
+  assert_eq(
+    request_outcome(Request::SlabsReassign(src=1, dst=2, noreply=false)),
+    "ok",
+  )
+  assert_eq(
+    request_outcome(Request::SlabsReassign(src=-1, dst=-1, noreply=false)),
+    "ok",
+  )
+  assert_eq(
+    request_outcome(Request::SlabsReassign(src=-2, dst=1, noreply=false)),
+    "malformed",
+  )
+  assert_eq(
+    request_outcome(Request::SlabsReassign(src=1, dst=-2, noreply=false)),
+    "malformed",
+  )
+  assert_eq(
+    request_outcome(Request::SlabsAutomove(mode=0, noreply=false)),
+    "ok",
+  )
+  assert_eq(
+    request_outcome(Request::SlabsAutomove(mode=2, noreply=false)),
+    "ok",
+  )
+  assert_eq(
+    request_outcome(Request::SlabsAutomove(mode=3, noreply=false)),
+    "malformed",
+  )
+  assert_eq(
+    request_outcome(Request::SlabsAutomove(mode=-1, noreply=false)),
+    "malformed",
+  )
+}

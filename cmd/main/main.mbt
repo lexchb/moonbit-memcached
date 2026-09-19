@@ -104,6 +104,7 @@ fn run() -> Unit raise {
   println("== noreply and administrative commands ==")
   let admin = @lib.ScriptedConnection::new([
     b"VERSION 1.6.21\r\nSTAT curr_items 2\r\nSTAT version 1.6.21\r\nEND\r\n", b"OK\r\n",
+    b"OK\r\n",
   ])
   let admin_client = @lib.Client::new(admin)
   println("version -> \{admin_client.version()}")
@@ -112,6 +113,7 @@ fn run() -> Unit raise {
     println("stat    -> \{entry.name} = \{entry.value}")
   }
   println("flush   -> \{status_name(admin_client.flush_all(None))}")
+  println("memlimit-> \{status_name(admin_client.cache_memlimit(64))}")
   admin_client.send(@lib.Request::Delete(key="gone", noreply=true))
   println("wire -> \{render(admin.written())}")
 

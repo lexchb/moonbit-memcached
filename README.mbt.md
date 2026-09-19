@@ -62,6 +62,9 @@
 | `Stats(sub)` | `stats` 或 `stats [<sub>]`（`<sub>` 可以是多个词，如 `detail on`） |
 | `FlushAll(delay, noreply)` | `flush_all [<delay>] [noreply]` |
 | `Verbosity(level, noreply)` | `verbosity <level> [noreply]` |
+| `CacheMemlimit(megabytes, noreply)` | `cache_memlimit <megabytes> [noreply]` |
+| `SlabsReassign(src, dst, noreply)` | `slabs reassign <src> <dst> [noreply]`（`src` 为 `-1` 时由服务器自选源 slab） |
+| `SlabsAutomove(mode, noreply)` | `slabs automove <mode> [noreply]`（`mode` 为 `0` 关 / `1` 开 / `2` 激进） |
 | `Quit` | `quit` |
 
 `StorageOp` 有 `Set / Add / Replace / Append / Prepend / Cas` 六种，只用于 `Storage` 变体，
@@ -75,7 +78,7 @@
 | 命令 | 是否有应答 |
 | --- | --- |
 | `Get` / `Gat` / `Version` / `Stats` | 恒为「有」 |
-| `Storage` / `Delete` / `Incr` / `Decr` / `Touch` / `FlushAll` / `Verbosity` | 取 `noreply` 的相反数 |
+| `Storage` / `Delete` / `Incr` / `Decr` / `Touch` / `FlushAll` / `Verbosity` / `CacheMemlimit` / `SlabsReassign` / `SlabsAutomove` | 取 `noreply` 的相反数 |
 | `Quit` | 恒为「无」（协议规定不回复） |
 
 这条信息被客户端用来把两个方向分开：有应答的走 `execute`，无应答的走 `send`，
@@ -86,7 +89,7 @@
 | 类型 | 含义 |
 | --- | --- |
 | `Response::Values(Array[RetrievedValue])` | `get`/`gets`/`gat`/`gats` 的结果，可能为空（未命中） |
-| `Response::Status(Status)` | 存储类、`delete`、`touch`、`flush_all`、`verbosity` 的终止状态行 |
+| `Response::Status(Status)` | 存储类、`delete`、`touch`、`flush_all`、`verbosity`、`cache_memlimit`、`slabs` 的终止状态行 |
 | `Response::Counter(UInt64)` | `incr`/`decr` 执行后计数器的值 |
 | `Response::Version(String)` | `version` 的版本字符串 |
 | `Response::Stats(Array[StatEntry])` | `stats` 的 `STAT` 行，直到 `END` |
@@ -131,6 +134,9 @@
      因此 `detail on`、`cachedump 1 100` 这类带参数的段名会变成 `stats detail on` 这样的命令行。
    - `FlushAll`：写 `flush_all`，有延迟时再补 `" <delay>"`，最后是 `noreply`。
    - `Verbosity`：写 `verbosity <level>`，最后是 `noreply`。
+   - `CacheMemlimit`：写 `cache_memlimit <megabytes>`，最后是 `noreply`。
+   - `SlabsReassign`：写 `slabs reassign <src> <dst>`，最后是 `noreply`。
+   - `SlabsAutomove`：写 `slabs automove <mode>`，最后是 `noreply`。
    - `Quit`：常量 `quit\r\n`。
 3. `Buffer::to_bytes()` 返回最终字节。
 
@@ -155,6 +161,9 @@ stats items\r\n
 flush_all\r\n                      # FlushAll(None, noreply=false)
 flush_all 10\r\n                   # FlushAll(Some(10), noreply=false)
 verbosity 2\r\n
+cache_memlimit 64\r\n              # CacheMemlimit(64, noreply=false)
+slabs reassign -1 2\r\n            # SlabsReassign(-1, 2, noreply=false)
+slabs automove 2 noreply\r\n       # SlabsAutomove(2, noreply=true)
 quit\r\n
 ```
 
@@ -188,7 +197,7 @@ Decoder::next
 `decode_status` 用一串精确匹配把终止行映射成 `Status`：
 
 - `STORED`、`NOT_STORED`、`EXISTS`、`NOT_FOUND`、`DELETED`、`TOUCHED`、`OK` → 对应的 `Status`
-  （`OK` 是 `flush_all` 与 `verbosity` 的应答）
+  （`OK` 是 `flush_all`、`verbosity`、`cache_memlimit` 与 `slabs` 系命令的应答）
 - `ERROR` → `Remote(Generic, 行内容)`
 - 以 `CLIENT_ERROR` 开头 → `Remote(Client, ...)`
 - 以 `SERVER_ERROR` 开头 → `Remote(Server, ...)`
@@ -369,6 +378,9 @@ Client { conn : &Connection, decoder : Decoder }
 | `stats()` / `stats_of(section)` | `stats` / `stats <section>` | `Array[StatEntry]` |
 | `flush_all(delay)` | `flush_all [<delay>]`，`None` 表示立即 | `Status` |
 | `verbosity(level)` | `verbosity <level>` | `Status` |
+| `cache_memlimit(megabytes)` | `cache_memlimit <megabytes>`，调整 item 内存上限 | `Status` |
+| `slabs_reassign(src, dst)` | `slabs reassign <src> <dst>`，`src` 为 `-1` 时由服务器自选 | `Status` |
+| `slabs_automove(mode)` | `slabs automove <mode>`（`0` 关 / `1` 开 / `2` 激进） | `Status` |
 | `quit()` | `quit` | `Unit` |
 
 上面这些方法都固定 `noreply=false` 并走 `execute`，因此每一个都能拿到服务器的确认。
@@ -382,6 +394,10 @@ Client { conn : &Connection, decoder : Decoder }
 关闭连接用 postfix `catch` 兜底：`write` 失败时先 `self.conn.close()` 再把错误重新抛出，
 写成功时在函数末尾关闭，两种情况都不会泄漏连接。这里是**尽力而为**的关闭——若连关闭本身
 也失败了，那个错误被就地吞掉，因为调用方要的是「写不出去」这个原因，而不是「顺手关闭也失败」。
+
+与命令无关的连接管理还有一个入口：`Client::resync()` 直接转发内部的 `Decoder::resync`
+（见第五节「缓冲上限与失步恢复」），在 `Desynchronised` 之后、流的 framing 已知重新开始时
+（典型如重连）清空缓冲残片，让同一个 `Client` 不必重建就能继续。
 
 ## 七、请求校验
 
@@ -417,6 +433,9 @@ key 与那个字节都经 `quote` 处理（见第五节第 6 小节），制表�
 | `Stats` | 有子命令时，段名是命令行里的一串「词」：段名可以带参数（`stats detail on`、`stats cachedump 1 100`），词之间只允许**单个**空格，且每个词都要满足 key 的规则（非空、≤250 字节、无空白与控制字符）。空段名、首尾空格、连续两个空格都会留下一个空词，一律拒绝 |
 | `FlushAll` | `delay` 为 `Some(n)` 时要求 `n >= 0` |
 | `Verbosity` | `level < 0` 即拒绝 |
+| `CacheMemlimit` | `megabytes < 0` 即拒绝 |
+| `SlabsReassign` | `src` / `dst` 不得小于 `-1`（`-1` 表示由服务器自选源 slab） |
+| `SlabsAutomove` | `mode` 只接受 `0` / `1` / `2` |
 | `Version` / `Quit` | 无需校验 |
 
 段名的长度上限是**从 key 借来的**：memcached 对 `stats` 段名没有单独的限制，命令行整体按一串
@@ -452,7 +471,7 @@ trait Connection {
 
 ## 九、测试与示例
 
-两个套件都不需要 memcached 服务端，`moon test` 共 73 个用例（黑盒 46 + 白盒 27）。
+两个套件都不需要 memcached 服务端，`moon test` 共 78 个用例（黑盒 50 + 白盒 28）。
 
 ### 黑盒测试（`memcached_test.mbt`）
 
@@ -460,7 +479,8 @@ trait Connection {
 
 - **编码**：存储命令行与数据块、CAS 令牌、空值、get/gets 多 key、
   `gat`/`gats`（`<exptime>` 位于 key 之前）、`touch`、delete/incr/decr/quit、
-  `version`/`stats`/`stats <section>`/`flush_all`/`verbosity` 的可选参数、以及 `noreply`
+  `version`/`stats`/`stats <section>`/`flush_all`/`verbosity` 的可选参数、
+  `cache_memlimit` 与 `slabs reassign`/`automove` 的管理命令行、以及 `noreply`
   一律追加在命令行末尾；
 - **解码**：七种状态行（含 `OK`）、计数器数字、单个/多个 `VALUE` 块、未命中（`END`）、
   `VERSION` 行、`STAT` 块（含无值的 STAT 行被拒、`END` 前未结束则继续等待、只收到半行
@@ -468,12 +488,15 @@ trait Connection {
   多响应、服务器错误的三种类别、非法帧（未知行、字段数不对、数据块未以 CRLF 结尾）；
 - **客户端**：单连接上 set + get 的完整往返与线上字节断言、cas 透传令牌、便捷存储方法透传
   flags/exptime（线上字节逐字节断言）、计数器返回值、
-  `touch`/`gat`/`gats` 往返、`version` 与 `stats` 的取值、`flush_all`/`verbosity` 读回 `OK`、
+  `touch`/`gat`/`gats` 往返、`version` 与 `stats` 的取值、`flush_all`/`verbosity`/
+  `cache_memlimit`/`slabs` 系命令读回 `OK`、
   `send` 写出 `noreply` 命令且**一个字节都不读**、有应答的命令不能 `send`、无应答的命令不能
   `execute`、`quit`（含写入失败时仍释放连接）、响应中途断连报 `TransportError::Io`、
   未知行报 `Malformed`、key 长度与字符合法性边界（250 通过 / 251 拒绝 / 空串 / 空格 /
-  制表符 / 换行）、空 key 列表在写出任何字节之前就被拒绝、声明的字节数远大于可用数据时只是
-  等待而不是错误分帧、始终无法定帧的应答被 `with_limit` **当场**判为 `Malformed` 而不是无限缓冲；
+  制表符 / 换行）、空 key 列表与管理命令的非法参数（负的 megabytes、小于 -1 的 slab class、
+  超出 `0..=2` 的 automove 模式）在写出任何字节之前就被拒绝、声明的字节数远大于可用数据时只是
+  等待而不是错误分帧、始终无法定帧的应答被 `with_limit` **当场**判为 `Malformed` 而不是无限缓冲、
+  失步的连接经 `Client::resync` 清空残片后照常往返；
 - **缓冲上限与块上限**：上限为 0 的解码器仍能解出**已经完整**的响应（上限只在等待时才起作用），
   而同样大小的一段残片会被判为 `Desynchronised(0, 6)` 并如实报出上限与已缓冲字节数；缓冲区
   长度**恰好等于**上限时继续等待（判据是「超过」而不是「达到」），多一个字节才判失步；而块
@@ -520,7 +543,8 @@ trait Connection {
 - 校验：`validate_key` 对 `0x1F`、`0x7F` 等控制字符与长度边界的判定（含多字节字符按
   UTF-8 字节计数的 249 通过 / 252 拒绝），并且逐个断言拒绝时的**消息原文**——空 key 那条不带
   参数，超长那条报出 251 与 250 两个数，撞上制表符、空格、`0x7F` 时把违规字节转义后附在 key
-  后面；`validate_request` 覆盖每条带 key 的命令；
+  后面；`validate_request` 覆盖每条带 key 的命令，以及三条管理命令的参数边界
+  （`cache_memlimit` 拒绝负数、`slabs reassign` 以 `-1` 为下限、`slabs automove` 只收 `0..=2`）；
   `stats` 的段名另有一组用例——`detail on`、`cachedump 1 100` 这类多词段名通过，而空段名、
   首尾空格、连续两个空格、含制表符的段名都拒绝；空段名与超长段名同走长度判据，报出实际字节数
   与 `1..250`；首空格、尾空格、连续两个空格留下的空词收敛到同一条 `stats section has an empty
@@ -536,7 +560,7 @@ moon info && moon fmt
 
 `cmd/main/main.mbt` 用 `ScriptedConnection` 演示四段内容：请求编码结果（带转义，便于看清
 `\r\n` 分帧，含 `gat`、`noreply` 的 `del!`、`stats items`、`flush_all 10`）、单连接客户端的
-set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这些管理命令（`send` 出去的
+set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all`/`cache_memlimit` 这些管理命令（`send` 出去的
 `delete gone noreply` 同样出现在线上字节里）、以及增量解码器“半个响应等待、补齐后解出”。
 
 ## 十、边界与已知限制
@@ -548,8 +572,8 @@ set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这�
   缓冲区里，被**下一条** `execute` 当成自己的响应，从而报出位置不对的 `Malformed` 或 `Remote`。
   文本协议的 `noreply` 只抑制正常应答，并不抑制错误；需要严格的错误归属时请用 `execute`。
 - **失步要靠调用方恢复**：`Decoder` 只抛出 `ProtocolError::Desynchronised(limit, buffered)`，
-  不会自己丢弃残片；要先显式 `resync()`（或另建 `Client`）才能重新同步，在此之前缓冲区里的
-  字节始终还在。
+  不会自己丢弃残片；要先显式 `Client::resync()`（或直接操作 `Decoder::resync()`，或另建
+  `Client`）才能重新同步，在此之前缓冲区里的字节始终还在。
 - **有字节上限，没有时间上限**：`DEFAULT_BUFFER_LIMIT`（8 MiB）拦的是“缓冲无限增长”，
   不是“响应迟迟不来”。`Connection::read` 阻塞多久完全由实现决定，本库不做超时。同一个上限
   也界定了 `VALUE` 头里 `<bytes>` 的合法范围：块要连同头行、块尾的 `\r\n` 与收尾的 `END` 行
@@ -557,8 +581,9 @@ set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这�
   因此服务端若配置了比当前上限更大的单条 item 上限，默认配置下本库无法表达——需要放宽带块时
   用 `Decoder::with_limit` / `Client::with_limit`。
 - **仍未覆盖的协议**：二进制协议、meta 协议（`mg`/`ms`/`md`/`ma`）、SASL 认证、UDP 传输、
-  压缩值等都不支持；文本协议这边的子命令形式只覆盖到 `stats [<section>]` 这一类
-  （段名本身可带参数，如 `stats detail on`）。
+  压缩值等都不支持；文本协议这边的管理命令覆盖 `stats [<section>]`（段名本身可带参数，
+  如 `stats detail on`）、`cache_memlimit` 与 `slabs reassign`/`automove`，`lru_crawler`、
+  `lru tuner`、`shutdown` 等仍未支持。
 - **校验不做数值范围检查**：`flags`、`exptime`、`cas` 的取值本身不校验，`exptime` 为负会直接
   编码成 `-1` 交给服务器裁决；真正越界的是**解码**侧——`parse_decimal` 在 u64 上界之外报
   `Malformed` 而不是静默回绕，`parse_decimal_int` 对超过 `i32` 上界的字段同样报错。
@@ -574,14 +599,15 @@ set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这�
 
 ## 十一、扩展示例：新增一条命令
 
-以增加 `cache_memlimit <megabytes> [noreply]` 为例，改动点固定为五处：
+`cache_memlimit`、`slabs reassign`、`slabs automove` 三条管理命令就是按这条固定路线加入的。
+以 `cache_memlimit <megabytes> [noreply]` 为例，改动点固定为五处：
 
-1. `Request` 增加变体（`MemLimit(megabytes : Int, noreply : Bool)`）；
+1. `Request` 增加变体（`CacheMemlimit(megabytes~ : Int, noreply~ : Bool)`）；
 2. `Request::to_bytes` 增加对应分支，`noreply` 用现成的 `write_noreply` 追加；
 3. `Request::expects_reply` 增加分支 —— 这条命令有应答，返回 `!noreply`（穷尽匹配会强制你补上
    这一步，否则编译不过）；
-4. `client.mbt` 的 `validate_request` 增加范围校验分支（同样保持穷尽匹配）；
-5. `Client` 增加便捷方法 `memlimit(megabytes)`，并用 `expect_status` 收尾。
+4. `client.mbt` 的 `validate_request` 增加范围校验分支（`megabytes < 0` 即拒绝，同样保持穷尽匹配）；
+5. `Client` 增加便捷方法 `cache_memlimit(megabytes)`，并用 `expect_status` 收尾。
 
 `noreply` 是上述五步里的横切关注点：`to_bytes` 负责把它写进命令行，`expects_reply` 负责据此
 决定 `execute` 还是 `send` 可用。两步都做完，新命令才不会被误用在错误的入口上。
@@ -608,7 +634,7 @@ set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这�
   压缩值等均不支持。
 
 后续按以下方向推进：补上真实 socket 的 `Connection` 实现与连接池示例；增加流水线批处理 API；
-扩展 `stats` 之外的管理类子命令；视需要在保持三层结构不变的前提下接入更完整的协议特性。
+视需要在保持三层结构不变的前提下接入更完整的协议特性（meta、二进制协议等）。
 
 ## 扩展方向与难度
 
@@ -616,8 +642,6 @@ set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这�
 
 | 方向 | 难度 | 评估 |
 | --- | --- | --- |
-| 管理类子命令（`cache_memlimit`、`slabs reassign` 等） | ★ 很低 | 文档第十一节的五步配方直接可用；响应多为状态行，`decode_status` 已覆盖；穷尽匹配强制补全 |
-| `Client::resync()` 便捷方法 | ★ 很低 | 目前失步后要碰 `client.decoder.resync()`，包一层即可，顺带可在文档里把恢复流程写死 |
 | 超时支持 | ★ 很低（本库侧） | `Connection::read` 的阻塞语义本就是实现定义，超时天然属于 socket 实现的 read timeout；本库只需文档说明。**不建议**在 API 里加截止时间参数，会污染三层结构 |
 | 压缩值 | ★★ 低 | 纯客户端变换：存前压缩 + flags 置标志位，取后按 flags 解压，协议零改动。唯一风险是 MoonBit 生态缺少现成 deflate/zlib 绑定 |
 
@@ -643,6 +667,6 @@ set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all` 这�
 
 ### 建议路线
 
-`flags/exptime` 透传已完成（`set` / `add` / `replace` / `append` / `prepend` / `cas` 均接受可选的
-`flags` / `exptime`）。后续：`管理子命令 + Client::resync` → `流水线批处理`（收益最大、成本最低的
-一个）→ `socket + 连接池`（取决于 MoonBit 生态）→ `meta 协议` / `二进制协议`（按需）。UDP 从规划移除。
+`flags/exptime` 透传与「管理子命令 + `Client::resync`」已完成（`cache_memlimit` / `slabs reassign` /
+`slabs automove` 与 `Client::resync` 已就位）。后续：`流水线批处理`（收益最大、成本最低的一个）→
+`socket + 连接池`（取决于 MoonBit 生态）→ `meta 协议` / `二进制协议`（按需）。UDP 从规划移除。
