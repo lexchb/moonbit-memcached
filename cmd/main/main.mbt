@@ -45,6 +45,22 @@ fn cas_text(cas : UInt64?) -> String {
 }
 
 ///|
+/// Describe one slot of a pipeline result.
+///
+/// A silent request has no reply to show, which is why the slot says so instead
+/// of holding some placeholder response.
+fn reply_text(reply : @lib.Response?) -> String {
+  match reply {
+    None => "silent request, nothing to read"
+    Some(@lib.Response::Values(values)) => "\{values.length()} value(s)"
+    Some(@lib.Response::Status(status)) => status_name(status)
+    Some(@lib.Response::Counter(value)) => value.to_string()
+    Some(@lib.Response::Version(version)) => version
+    Some(@lib.Response::Stats(entries)) => "\{entries.length()} stat(s)"
+  }
+}
+
+///|
 fn run() -> Unit raise {
   println("== request encoding ==")
   let set_request : @lib.Request = @lib.Request::Storage(
@@ -116,6 +132,30 @@ fn run() -> Unit raise {
   println("memlimit-> \{status_name(admin_client.cache_memlimit(64))}")
   admin_client.send(@lib.Request::Delete(key="gone", noreply=true))
   println("wire -> \{render(admin.written())}")
+
+  println("")
+  println("== pipelined batch ==")
+  let batch = @lib.ScriptedConnection::new([
+    b"STORED\r\n", b"VALUE foo 0 3\r\nbar\r\nEND\r\n",
+  ])
+  let batch_client = @lib.Client::new(batch)
+  let replies = batch_client.pipeline([
+    @lib.Request::Storage(
+      op=@lib.StorageOp::Set,
+      key="foo",
+      flags=0,
+      exptime=0,
+      value=b"bar",
+      cas=None,
+      noreply=false,
+    ),
+    @lib.Request::Delete(key="gone", noreply=true),
+    @lib.Request::Get(keys=["foo"], with_cas=false),
+  ])
+  println("wire -> \{render(batch.written())}")
+  for index in 0..<replies.length() {
+    println("reply-> #\{index} \{reply_text(replies[index])}")
+  }
 
   println("")
   println("== incremental decoding ==")

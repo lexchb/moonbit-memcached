@@ -435,6 +435,32 @@ test "server side errors are surfaced with their kind" {
 }
 
 ///|
+test "a remote error line is consumed, so the reply behind it is readable" {
+  let decoder = @memcached.Decoder::new()
+  decoder.feed(b"CLIENT_ERROR bad command line\r\nSTORED\r\n")
+  let first = try {
+    ignore(decoder.next())
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Remote(@memcached.RemoteErrorKind::Client, _) =>
+          "client"
+        _ => "other"
+      }
+  }
+  assert_true(first == "client")
+  // The reported line is behind the reader, so the next response comes out
+  // instead of the same error being raised once per call.
+  match decoder.next() {
+    Some(@memcached.Response::Status(status)) =>
+      assert_true(status == @memcached.Status::Stored)
+    _ => abort("expected a status response")
+  }
+  assert_true(decoder.buffered() == 0)
+}
+
+///|
 test "frames that break the text protocol are rejected" {
   assert_true(reaction(b"WHAT\r\n") == "malformed")
   assert_true(reaction(b"VALUE onlyonefield\r\n") == "malformed")
@@ -597,6 +623,255 @@ test "a command that has a reply cannot be sent blind" {
   let client = @memcached.Client::new(connection)
   let outcome = try {
     client.send(@memcached.Request::Version)
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+  assert_true(outcome == "malformed")
+  assert_true(connection.written() == b"")
+}
+
+///|
+/// A connection that records the order in which it was written to and read from.
+///
+/// A pipeline's whole point is that every write happens before the first read,
+/// and the bytes a connection ends up holding cannot show that - only the order
+/// of the calls can. Reads hand out the next chunk, truncated to the requested
+/// size, exactly as `ScriptedConnection` does.
+struct TracingConnection {
+  chunks : Array[Bytes]
+  mut index : Int
+  mut pending : Bytes
+  events : Array[String]
+}
+
+///|
+/// A tracing connection that replays `chunks`.
+fn TracingConnection::new(chunks : Array[Bytes]) -> TracingConnection {
+  { chunks, index: 0, pending: b"", events: [] }
+}
+
+///|
+impl @memcached.Connection for TracingConnection with fn write(self, _data) {
+  self.events.push("write")
+}
+
+///|
+impl @memcached.Connection for TracingConnection with fn read(self, max) {
+  self.events.push("read")
+  if self.pending.length() == 0 {
+    guard self.index < self.chunks.length() else { return b"" }
+    self.pending = self.chunks[self.index]
+    self.index = self.index + 1
+  }
+  let take = if self.pending.length() < max {
+    self.pending.length()
+  } else {
+    max
+  }
+  let head = self.pending.view(end=take).to_owned()
+  self.pending = self.pending.view(start=take).to_owned()
+  head
+}
+
+///|
+impl @memcached.Connection for TracingConnection with fn close(self) {
+  self.index = self.chunks.length()
+  self.pending = b""
+}
+
+///|
+/// A `set <key>` carrying `x`, silent when `noreply` is set.
+fn set_of(key : String, noreply? : Bool = false) -> @memcached.Request {
+  @memcached.Request::Storage(
+    op=@memcached.StorageOp::Set,
+    key~,
+    flags=0,
+    exptime=0,
+    value=b"x",
+    cas=None,
+    noreply~,
+  )
+}
+
+///|
+test "a pipeline pairs every reply with the request that asked for it" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"STORED\r\n", b"VALUE foo 0 3\r\nbar\r\nEND\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  let replies = client.pipeline([
+    set_of("foo"),
+    @memcached.Request::Delete(key="gone", noreply=true),
+    @memcached.Request::Get(keys=["foo"], with_cas=false),
+  ])
+  assert_true(replies.length() == 3)
+  match replies[0] {
+    Some(@memcached.Response::Status(status)) =>
+      assert_true(status == @memcached.Status::Stored)
+    _ => abort("expected a status response")
+  }
+  // The silent deletion takes a slot of its own, so the index still names the
+  // request it belongs to instead of shifting the retrieval one place up.
+  assert_true(replies[1] is None)
+  match replies[2] {
+    Some(@memcached.Response::Values(values)) =>
+      assert_true(values[0].data == b"bar")
+    _ => abort("expected a retrieval response")
+  }
+  assert_true(
+    connection.written() ==
+    b"set foo 0 0 1\r\nx\r\ndelete gone noreply\r\nget foo\r\n",
+  )
+}
+
+///|
+test "a pipeline writes its whole batch before it reads any reply" {
+  let connection = TracingConnection::new([b"STORED\r\n", b"END\r\n"])
+  let client = @memcached.Client::new(connection)
+  let _ = client.pipeline([
+    set_of("a"),
+    @memcached.Request::Delete(key="b", noreply=true),
+    @memcached.Request::Get(keys=["c"], with_cas=false),
+  ])
+  // Three writes then two reads: the two replies that were asked for, in the
+  // order the requests were given, with the silent one skipped.
+  assert_true(connection.events == ["write", "write", "write", "read", "read"])
+}
+
+///|
+test "a batch of silent mutations writes every command and reads nothing" {
+  let connection = TracingConnection::new([])
+  let client = @memcached.Client::new(connection)
+  let replies = client.pipeline([
+    set_of("a", noreply=true),
+    set_of("b", noreply=true),
+  ])
+  assert_true(replies.length() == 2)
+  assert_true(replies[0] is None)
+  assert_true(replies[1] is None)
+  assert_true(connection.events == ["write", "write"])
+}
+
+///|
+test "an empty batch writes nothing, reads nothing and returns nothing" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([],
+  )
+  let client = @memcached.Client::new(connection)
+  assert_true(client.pipeline([]).length() == 0)
+  assert_true(connection.written() == b"")
+}
+
+///|
+test "a split reply is reassembled inside a pipeline" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"VALUE foo 0 3\r\nba", b"r\r\nEND\r\n", b"STORED\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  let replies = client.pipeline([
+    @memcached.Request::Get(keys=["foo"], with_cas=false),
+    set_of("bar"),
+  ])
+  match replies[0] {
+    Some(@memcached.Response::Values(values)) => {
+      assert_true(values.length() == 1)
+      assert_true(values[0].data == b"bar")
+    }
+    _ => abort("expected a retrieval response")
+  }
+  match replies[1] {
+    Some(@memcached.Response::Status(status)) =>
+      assert_true(status == @memcached.Status::Stored)
+    _ => abort("expected a status response")
+  }
+}
+
+///|
+test "a remote error drains the replies behind it and then surfaces" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"SERVER_ERROR out of memory\r\n", b"NOT_STORED\r\n", b"STORED\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  let outcome = try {
+    let _ = client.pipeline([set_of("a"), set_of("b")])
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Remote(@memcached.RemoteErrorKind::Server, _) =>
+          "server"
+        _ => "other"
+      }
+  }
+  assert_true(outcome == "server")
+  // The reply owed to the second request was read and dropped, so the next
+  // command reads its own answer (STORED) rather than the one left behind
+  // (NOT_STORED).
+  assert_true(client.set("c", b"x") == @memcached.Status::Stored)
+  assert_true(
+    connection.written() ==
+    b"set a 0 0 1\r\nx\r\nset b 0 0 1\r\nx\r\nset c 0 0 1\r\nx\r\n",
+  )
+}
+
+///|
+test "a reply that cannot be framed stops the pipeline without draining" {
+  let connection = TracingConnection::new([b"BOGUS\r\n", b"STORED\r\n"])
+  let client = @memcached.Client::new(connection)
+  let outcome = try {
+    let _ = client.pipeline([set_of("a"), set_of("b")])
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+  assert_true(outcome == "malformed")
+  // A stream that lost its framing has no reply worth reading, so nothing is
+  // read after the failure: the batch stops at the byte that broke it.
+  assert_true(connection.events == ["write", "write", "read"])
+}
+
+///|
+test "a batch holding an invalid request writes nothing" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([],
+  )
+  let client = @memcached.Client::new(connection)
+  let outcome = try {
+    let _ = client.pipeline([
+      set_of("a"),
+      @memcached.Request::CacheMemlimit(megabytes=-1, noreply=false),
+    ])
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+  // Validation runs over the whole batch before the first byte goes out, so the
+  // valid request ahead of the bad one is not written either.
+  assert_true(outcome == "malformed")
+  assert_true(connection.written() == b"")
+}
+
+///|
+test "quit cannot travel in a pipeline" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([],
+  )
+  let client = @memcached.Client::new(connection)
+  let outcome = try {
+    let _ = client.pipeline([set_of("a"), @memcached.Request::Quit, set_of("b")])
     "accepted"
   } catch {
     err =>

@@ -745,3 +745,113 @@ test "request validation covers the administrative commands" {
     "malformed",
   )
 }
+
+///|
+/// How `validate_pipeline` reacts to `requests`.
+fn pipeline_outcome(requests : Array[Request]) -> String {
+  try {
+    validate_pipeline(requests)
+    "ok"
+  } catch {
+    err => name_of(err)
+  }
+}
+
+///|
+/// How `Decoder::next` reacts to the bytes already fed into `decoder`.
+fn next_outcome(decoder : Decoder) -> String {
+  try {
+    ignore(decoder.next())
+    "ok"
+  } catch {
+    err => name_of(err)
+  }
+}
+
+///|
+test "a remote line is consumed and a malformed one is kept" {
+  let remote = Decoder::new()
+  remote.feed(b"ERROR\r\nSTORED\r\n")
+  assert_eq(next_outcome(remote), "generic")
+  // The reported line is behind the reader now, which is what lets the reply
+  // that followed it be read at all.
+  assert_eq(remote.buffered(), 8)
+  match remote.next() {
+    Some(Response::Status(Status::Stored)) => ()
+    _ => abort("expected the reply behind the error line")
+  }
+
+  let malformed = Decoder::new()
+  malformed.feed(b"WHAT\r\nSTORED\r\n")
+  assert_eq(next_outcome(malformed), "malformed")
+  // A line that cannot be read as a response stays where it is: nothing here
+  // knows where the next response would begin, so resync is the way out.
+  assert_eq(malformed.buffered(), 14)
+}
+
+///|
+test "a batch reads one reply per answering slot, in order" {
+  let connection = ScriptedConnection::new([b"STORED\r\n", b"OK\r\n"])
+  let client = Client::new(connection)
+  // The middle slot is a `noreply` request, so it costs no read at all and the
+  // second response on the wire belongs to the third slot.
+  let responses = client.read_replies([true, false, true])
+  assert_eq(responses.length(), 3)
+  match responses[0] {
+    Some(Response::Status(Status::Stored)) => ()
+    _ => abort("expected the first slot to hold STORED")
+  }
+  assert_true(responses[1] is None)
+  match responses[2] {
+    Some(Response::Status(Status::Ok)) => ()
+    _ => abort("expected the third slot to hold OK")
+  }
+}
+
+///|
+test "a batch counts the replies it is still owed from a slot on" {
+  assert_eq(remaining_reply_count([true, false, true], 0), 2)
+  assert_eq(remaining_reply_count([true, false, true], 1), 1)
+  assert_eq(remaining_reply_count([true, false, true], 2), 1)
+  assert_eq(remaining_reply_count([true, false, true], 3), 0)
+  assert_eq(remaining_reply_count([false, false], 0), 0)
+  assert_eq(remaining_reply_count([true, true], 1), 1)
+}
+
+///|
+test "a pipeline refuses quit wherever it sits and checks every request" {
+  assert_eq(pipeline_outcome([]), "ok")
+  assert_eq(pipeline_outcome([Request::Version]), "ok")
+  assert_eq(pipeline_outcome([Request::Quit]), "malformed")
+  assert_eq(pipeline_outcome([Request::Quit, Request::Version]), "malformed")
+  assert_eq(pipeline_outcome([Request::Version, Request::Quit]), "malformed")
+  // The check that a single request gets is applied to every member of the
+  // batch, so a bad request is found wherever it sits.
+  assert_eq(
+    pipeline_outcome([Request::Version, Request::Delete(key="", noreply=true)]),
+    "malformed",
+  )
+}
+
+///|
+test "dropping replies leaves the next response to be read" {
+  let connection = ScriptedConnection::new([
+    b"STORED\r\n", b"NOT_STORED\r\n", b"OK\r\n",
+  ])
+  let client = Client::new(connection)
+  client.discard_replies(2)
+  match client.read_response() {
+    Response::Status(Status::Ok) => ()
+    _ => abort("expected the third reply")
+  }
+}
+
+///|
+test "dropping replies swallows a failure a dead connection causes" {
+  let connection = ScriptedConnection::new([])
+  let client = Client::new(connection)
+  // Nothing is left to read, so the drop fails at once and says nothing: the
+  // reply it could not read is worthless to whoever is about to hear why the
+  // pipeline stopped.
+  client.discard_replies(3)
+}

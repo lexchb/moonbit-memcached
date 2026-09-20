@@ -426,7 +426,7 @@ priv struct ValueHeader {
 ///
 /// The literal is the framing itself, so its length is the count: nothing here
 /// is added up by hand, and a block is measured against whatever this actually
-/// holds. There are two CRLFs because `line` reaches [`parse_value_header`]
+/// holds. There are two CRLFs because `line` reaches `parse_value_header`
 /// with its own already stripped: the one that ended the header is counted here
 /// rather than where it was consumed.
 ///
@@ -439,7 +439,7 @@ const VALUE_RETRIEVAL_FRAMING : Bytes = b"\r\n\r\nEND\r\n"
 /// Parse a `VALUE <key> <flags> <bytes> [<cas unique>]` header line.
 ///
 /// `line` is the header without its terminating CRLF, which
-/// [`VALUE_RETRIEVAL_FRAMING`] counts in its place: a caller that passed the
+/// `VALUE_RETRIEVAL_FRAMING` counts in its place: a caller that passed the
 /// raw line would have those two bytes counted twice.
 ///
 /// `limit` is how many bytes the decoder that receives this block accepts
@@ -454,7 +454,7 @@ const VALUE_RETRIEVAL_FRAMING : Bytes = b"\r\n\r\nEND\r\n"
 ///
 /// A retrieval of several keys runs this check once per header, and every block
 /// is measured against the whole `limit`, not against what the blocks ahead of
-/// it left over - [`decode_value_blocks`] is the loop that does so. So it is a
+/// it left over - `decode_value_blocks` is the loop that does so. So it is a
 /// necessary condition for the sequence rather than a sufficient one: blocks
 /// that each fit alone may add up to a retrieval larger than the buffer holds.
 /// That a retrieval is long is not by itself a reason to refuse it here, because
@@ -500,7 +500,7 @@ fn parse_value_header(
 /// loop rather than by recursion, so a retrieval of many keys costs no stack.
 /// `limit` is passed on to every header this block sequence turns out to hold,
 /// each measured against the whole of it rather than against what the blocks
-/// ahead of it left over - [`parse_value_header`] carries the why and the
+/// ahead of it left over - `parse_value_header` carries the why and the
 /// consequence for a retrieval that outgrows the buffer.
 fn decode_value_blocks(
   bytes : BytesView,
@@ -659,7 +659,7 @@ pub struct Decoder {
 const DEFAULT_BUFFER_LIMIT : Int = 8 * 1024 * 1024
 
 ///|
-/// A decoder that accepts up to [`DEFAULT_BUFFER_LIMIT`] buffered bytes.
+/// A decoder that accepts up to `DEFAULT_BUFFER_LIMIT` buffered bytes.
 pub fn Decoder::new() -> Decoder {
   { buffer: Bytes::new(0), limit: DEFAULT_BUFFER_LIMIT }
 }
@@ -701,11 +701,37 @@ pub fn Decoder::resync(self : Decoder) -> Unit {
 }
 
 ///|
+/// Drop the first line of the buffer, its terminator included.
+///
+/// An error line is the one response that is both decoded and reported in the
+/// same step, so whoever reports it has to take it out of the buffer itself:
+/// unlike a decoded response there is no `(response, consumed)` pair to carry
+/// the length back, and leaving the bytes in place would make every later decode
+/// find the same line again. The line is known to end in CRLF, because that is
+/// what let it be read as a line at all.
+fn Decoder::drop_line(self : Decoder) -> Unit {
+  match find_crlf(self.buffer.view()) {
+    Some(eol) => self.buffer = self.buffer.view(start=eol + 2).to_owned()
+    // Unreachable in practice, since that very separator is what let the line be
+    // read at all. Doing nothing is the safe answer if that ever changes:
+    // dropping a prefix of unknown length would lose framing that may still be
+    // good.
+    None => ()
+  }
+}
+
+///|
 /// Decode the next complete response.
 ///
 /// Returns `None` when the buffered bytes are only a prefix of a response, in
 /// which case the caller should `feed` more data. The decoded bytes are
 /// consumed from the buffer, so responses can be pulled in a loop.
+///
+/// A `Remote` failure is a whole response of its own, and it is consumed before
+/// it is raised: the reply it reports has been answered, so the buffer moves past
+/// it. Were the line left where it was, the same error would be raised for every
+/// response asked for afterwards, and a client could never get back to the
+/// replies the server did send.
 ///
 /// Raises [`ProtocolError::Desynchronised`] instead of returning `None` when the
 /// buffered bytes already exceed the decoder's limit: a response that has not
@@ -715,9 +741,19 @@ pub fn Decoder::resync(self : Decoder) -> Unit {
 /// Raises [`ProtocolError::Malformed`] when a `VALUE` header declares a block
 /// larger than that same limit, because such a block could never be buffered
 /// whole; the header is refused before any of the block is kept, so the buffer
-/// does not have to fill up before the stream is called lost.
+/// does not have to fill up before the stream is called lost. A malformed line
+/// is not consumed, unlike a `Remote` one: the bytes could not be read as a
+/// response at all, so where the next response starts is exactly what is no
+/// longer known - that is what [`Decoder::resync`] is for.
 pub fn Decoder::next(self : Decoder) -> Response? raise ProtocolError {
-  match decode_response(self.buffer.view(), self.limit) {
+  let decoded = decode_response(self.buffer.view(), self.limit) catch {
+    Remote(kind, text) => {
+      self.drop_line()
+      raise Remote(kind, text)
+    }
+    err => raise err
+  }
+  match decoded {
     None => {
       let buffered = self.buffer.length()
       guard buffered <= self.limit else {

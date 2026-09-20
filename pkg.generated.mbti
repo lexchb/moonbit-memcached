@@ -38,6 +38,7 @@ pub fn Client::get(Self, Array[String]) -> Array[RetrievedValue] raise
 pub fn Client::gets(Self, Array[String]) -> Array[RetrievedValue] raise
 pub fn Client::incr(Self, String, UInt64) -> UInt64 raise
 pub fn Client::new(&Connection) -> Self
+pub fn Client::pipeline(Self, Array[Request]) -> Array[Response?] raise
 pub fn Client::prepend(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
 pub fn Client::quit(Self) -> Unit raise
 pub fn Client::replace(Self, String, Bytes, flags? : Int, exptime? : Int) -> Status raise
