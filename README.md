@@ -80,10 +80,10 @@ moon run cmd/main   # 跑演示程序
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push 与 pull request 上依次执行 `moon check`、
-`moon fmt --check`、`moon build`、`moon test`。
+`moon build`、`moon test`。
 
 仓库里另带一个 pre-commit 钩子（`.githooks/pre-commit`，依次跑 `moon check`、
-`moon fmt --check`、`moon test`，与 CI 的前三步一致）。克隆后执行一次即可让它在本地生效：
+`moon fmt --check`、`moon test`；格式检查只在这里做，不进入 CI）。克隆后执行一次即可让它在本地生效：
 
 ```shell
 git config core.hooksPath .githooks

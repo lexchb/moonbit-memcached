@@ -673,12 +673,11 @@ moon info && moon fmt      # 更新接口文件并格式化
 ```
 
 CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在每次 push 与 pull request 上依次
-执行 `moon check`、`moon build`、`moon test`，对应验收要求里的「检查、构建、测试」三流程；
-`moon fmt --check` 也在其中，用于拦住未格式化的提交。本包不依赖第三方库，因此这些命令在
-没有 memcached 服务端、也没有网络的环境里同样能全部通过。
+执行 `moon check`、`moon build`、`moon test`，对应验收要求里的「检查、构建、测试」三流程。
+本包不依赖第三方库，因此这些命令在没有 memcached 服务端、也没有网络的环境里同样能全部通过。
 
 仓库里另带一个 pre-commit 钩子（[`.githooks/pre-commit`](.githooks/pre-commit)，依次跑
-`moon check`、`moon fmt --check`、`moon test`，与 CI 的前三步一致）。克隆后执行一次
+`moon check`、`moon fmt --check`、`moon test`）；格式检查只在这里做，不进入 CI。克隆后执行一次
 `git config core.hooksPath .githooks` 即可让它在本机生效。
 
 `cmd/main/main.mbt` 用 `ScriptedConnection` 演示五段内容：请求编码结果（带转义，便于看清
