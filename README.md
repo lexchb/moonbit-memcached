@@ -72,14 +72,22 @@ moon run cmd/main
 ## 开发与测试
 
 ```shell
-moon check     # 类型检查
-moon build     # 构建模块
-moon test      # 跑测试
-moon run cmd/main
+moon check          # 类型检查
+moon fmt --check    # 检查格式
+moon build          # 构建模块
+moon test           # 跑测试
+moon run cmd/main   # 跑演示程序
 ```
 
 CI（`.github/workflows/ci.yml`）在每次 push 与 pull request 上依次执行 `moon check`、
 `moon fmt --check`、`moon build`、`moon test`。
+
+仓库里另带一个 pre-commit 钩子（`.githooks/pre-commit`，依次跑 `moon check`、
+`moon fmt --check`、`moon test`，与 CI 的前三步一致）。克隆后执行一次即可让它在本地生效：
+
+```shell
+git config core.hooksPath .githooks
+```
 
 ## 许可证
 

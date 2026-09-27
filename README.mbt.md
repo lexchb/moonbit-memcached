@@ -677,6 +677,10 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在每次 push 与
 `moon fmt --check` 也在其中，用于拦住未格式化的提交。本包不依赖第三方库，因此这些命令在
 没有 memcached 服务端、也没有网络的环境里同样能全部通过。
 
+仓库里另带一个 pre-commit 钩子（[`.githooks/pre-commit`](.githooks/pre-commit)，依次跑
+`moon check`、`moon fmt --check`、`moon test`，与 CI 的前三步一致）。克隆后执行一次
+`git config core.hooksPath .githooks` 即可让它在本机生效。
+
 `cmd/main/main.mbt` 用 `ScriptedConnection` 演示五段内容：请求编码结果（带转义，便于看清
 `\r\n` 分帧，含 `gat`、`noreply` 的 `del!`、`stats items`、`flush_all 10`）、单连接客户端的
 set/get 往返与线上字节、`noreply` 与 `version`/`stats`/`flush_all`/`cache_memlimit` 这些管理命令（`send` 出去的
