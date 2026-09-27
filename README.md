@@ -14,6 +14,9 @@
 
 ## 安装
 
+模块已发布到 mooncakes.io：[`lexchb/memcached`](https://mooncakes.io/docs/lexchb/memcached)，
+在模块目录里用包管理器添加即可：
+
 ```shell
 moon add lexchb/memcached
 ```
