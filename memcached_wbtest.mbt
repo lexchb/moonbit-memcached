@@ -50,11 +50,21 @@ fn int_outcome(text : String, what : String) -> String {
 }
 
 ///|
+/// Parse `line` as a `VALUE` header that arrived as exactly this text.
+///
+/// The byte count a header occupies on the wire is the length of the line it is
+/// read from, which is what `decode_response` hands over; spelling it out here
+/// keeps the assertions below about the fields rather than the measurement.
+fn parse_header(line : String, limit : Int) -> ValueHeader raise ProtocolError {
+  parse_value_header(line, @utf8.encode(line.view()).length(), limit)
+}
+
+///|
 /// How `parse_value_header` reacts to `line`, whose block is assumed to be
 /// received by a decoder of the default size.
 fn header_outcome(line : String, limit? : Int = DEFAULT_BUFFER_LIMIT) -> String {
   try {
-    ignore(parse_value_header(line, limit))
+    ignore(parse_header(line, limit))
     "ok"
   } catch {
     err => name_of(err)
@@ -138,6 +148,36 @@ fn status_outcome(response : Response) -> String {
 fn counter_outcome(response : Response) -> String {
   try {
     ignore(expect_counter(response))
+    "ok"
+  } catch {
+    err =>
+      match err {
+        ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+}
+
+///|
+/// How `expect_version` reacts to `response`.
+fn expect_version_outcome(response : Response) -> String {
+  try {
+    ignore(expect_version(response))
+    "ok"
+  } catch {
+    err =>
+      match err {
+        ProtocolError::Malformed(_) => "malformed"
+        _ => "other"
+      }
+  }
+}
+
+///|
+/// How `expect_stats` reacts to `response`.
+fn expect_stats_outcome(response : Response) -> String {
+  try {
+    ignore(expect_stats(response))
     "ok"
   } catch {
     err =>
@@ -272,16 +312,16 @@ test "parse_decimal_int stops at the signed 32-bit boundary" {
 
 ///|
 test "parse_value_header accepts four or five fields only" {
-  let plain = parse_value_header("VALUE foo 7 3", DEFAULT_BUFFER_LIMIT)
+  let plain = parse_header("VALUE foo 7 3", DEFAULT_BUFFER_LIMIT)
   assert_eq(plain.key, "foo")
   assert_eq(plain.flags, 7)
   assert_eq(plain.size, 3)
   assert_true(plain.cas is None)
 
-  let with_cas = parse_value_header("VALUE foo 7 3 42", DEFAULT_BUFFER_LIMIT)
+  let with_cas = parse_header("VALUE foo 7 3 42", DEFAULT_BUFFER_LIMIT)
   assert_true(with_cas.cas is Some(42UL))
 
-  let unicode = parse_value_header("VALUE 键 0 3", DEFAULT_BUFFER_LIMIT)
+  let unicode = parse_header("VALUE 键 0 3", DEFAULT_BUFFER_LIMIT)
   assert_eq(unicode.key, "键")
 
   assert_eq(header_outcome("VALUE foo 7"), "malformed")
@@ -377,6 +417,13 @@ test "a response of the wrong kind is reported as malformed" {
   assert_eq(status_outcome(Response::Counter(1UL)), "malformed")
   assert_eq(counter_outcome(Response::Counter(7UL)), "ok")
   assert_eq(counter_outcome(Response::Values([])), "malformed")
+  assert_eq(expect_version_outcome(Response::Version("1.6.21")), "ok")
+  assert_eq(
+    expect_version_outcome(Response::Status(Status::Stored)),
+    "malformed",
+  )
+  assert_eq(expect_stats_outcome(Response::Stats([])), "ok")
+  assert_eq(expect_stats_outcome(Response::Counter(1UL)), "malformed")
 }
 
 ///|
@@ -716,9 +763,19 @@ test "request validation covers the administrative commands" {
     request_outcome(Request::SlabsReassign(src=1, dst=2, noreply=false)),
     "ok",
   )
+  // `-1` lets the server pick the source slab, but the target still has to name
+  // a class: only the `src` field has a value that means "you choose".
+  assert_eq(
+    request_outcome(Request::SlabsReassign(src=-1, dst=2, noreply=false)),
+    "ok",
+  )
+  assert_eq(
+    request_outcome(Request::SlabsReassign(src=-1, dst=0, noreply=false)),
+    "ok",
+  )
   assert_eq(
     request_outcome(Request::SlabsReassign(src=-1, dst=-1, noreply=false)),
-    "ok",
+    "malformed",
   )
   assert_eq(
     request_outcome(Request::SlabsReassign(src=-2, dst=1, noreply=false)),
@@ -744,6 +801,28 @@ test "request validation covers the administrative commands" {
     request_outcome(Request::SlabsAutomove(mode=-1, noreply=false)),
     "malformed",
   )
+}
+
+///|
+test "the slab target is checked apart from the source" {
+  // The two fields share a shape but not a rule: `-1` is a value for `src` and
+  // not for `dst`, so the rejection has to say which of the two it is about.
+  try {
+    validate_request(Request::SlabsReassign(src=-1, dst=-1, noreply=false))
+    abort("expected a malformed error")
+  } catch {
+    ProtocolError::Malformed(message) =>
+      assert_eq(message, "slab target class cannot be negative: -1")
+    _ => abort("expected a malformed error")
+  }
+  try {
+    validate_request(Request::SlabsReassign(src=-2, dst=1, noreply=false))
+    abort("expected a malformed error")
+  } catch {
+    ProtocolError::Malformed(message) =>
+      assert_eq(message, "slab source class cannot be below -1: -2")
+    _ => abort("expected a malformed error")
+  }
 }
 
 ///|

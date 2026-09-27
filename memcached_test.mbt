@@ -513,6 +513,49 @@ test "client storage conveniences forward flags and exptime" {
 }
 
 ///|
+test "client storage conveniences drive every storage command word" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"STORED\r\n", b"STORED\r\n", b"STORED\r\n", b"STORED\r\n", b"STORED\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  assert_true(client.set("foo", b"bar") == @memcached.Status::Stored)
+  assert_true(client.add("foo", b"bar") == @memcached.Status::Stored)
+  assert_true(client.replace("foo", b"bar") == @memcached.Status::Stored)
+  assert_true(client.append("foo", b"bar") == @memcached.Status::Stored)
+  assert_true(client.prepend("foo", b"bar") == @memcached.Status::Stored)
+  assert_true(
+    connection.written() ==
+    b"set foo 0 0 3\r\nbar\r\nadd foo 0 0 3\r\nbar\r\nreplace foo 0 0 3\r\nbar\r\nappend foo 0 0 3\r\nbar\r\nprepend foo 0 0 3\r\nbar\r\n",
+  )
+}
+
+///|
+test "client gets reports the cas token of every block" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"VALUE foo 0 3 42\r\nbar\r\nEND\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  let values = client.gets(["foo"])
+  assert_true(values.length() == 1)
+  assert_true(values[0].cas is Some(42UL))
+  assert_true(connection.written() == b"gets foo\r\n")
+}
+
+///|
+test "client delete and decr read the reply of their own command" {
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      b"DELETED\r\n", b"9\r\n",
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  assert_true(client.delete("foo") == @memcached.Status::Deleted)
+  assert_true(client.decr("counter", 2UL) == 9UL)
+  assert_true(connection.written() == b"delete foo\r\ndecr counter 2\r\n")
+}
+
+///|
 test "client counter commands return the new value" {
   let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
       b"11\r\n",
@@ -1156,4 +1199,72 @@ test "client resync lets a desynchronised connection resume" {
   client.resync()
   assert_true(client.set("foo", b"bar") == @memcached.Status::Stored)
   assert_true(connection.written() == b"get foo\r\nset foo 0 0 3\r\nbar\r\n")
+}
+
+///|
+test "a reply larger than one read reaches the client in pieces" {
+  // The client asks for 4096 bytes at a time, so a longer reply cannot come out
+  // in one read: the connection hands over no more than what it was asked for
+  // and keeps the rest for the read after it.
+  let data = Bytes::make(5000, b'x')
+  let reply = Bytes::add(
+    Bytes::add(b"VALUE big 0 5000\r\n", data),
+    b"\r\nEND\r\n",
+  )
+  let connection : @memcached.ScriptedConnection = @memcached.ScriptedConnection::new([
+      reply,
+    ],
+  )
+  let client = @memcached.Client::new(connection)
+  let values = client.get(["big"])
+  assert_true(values.length() == 1)
+  assert_true(values[0].data == data)
+  assert_true(connection.written() == b"get big\r\n")
+}
+
+///|
+/// A connection that refuses both the write and the close that follows it.
+///
+/// The two failures cannot both be reported, so this is what tells which one
+/// reaches the caller: the one that explains why the connection is given up.
+struct DeadConnection {
+  mut closed : Bool
+}
+
+///|
+impl @memcached.Connection for DeadConnection with fn write(self, _data) {
+  ignore(self)
+  raise @memcached.TransportError::Io("write failed")
+}
+
+///|
+impl @memcached.Connection for DeadConnection with fn read(self, _max) {
+  ignore(self)
+  b""
+}
+
+///|
+impl @memcached.Connection for DeadConnection with fn close(self) {
+  self.closed = true
+  raise @memcached.TransportError::Io("close failed")
+}
+
+///|
+test "quit reports the send failure when closing fails as well" {
+  let connection : DeadConnection = { closed: false }
+  let client = @memcached.Client::new(connection)
+  let outcome = try {
+    client.quit()
+    "accepted"
+  } catch {
+    err =>
+      match err {
+        @memcached.TransportError::Io(message) => message
+        _ => "other"
+      }
+  }
+  // The close was attempted, and its own failure was swallowed: the reason the
+  // connection is being released is the send that could not go out.
+  assert_true(connection.closed)
+  assert_true(outcome == "write failed")
 }

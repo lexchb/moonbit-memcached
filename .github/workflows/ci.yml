@@ -31,5 +31,11 @@ jobs:
       - name: Check
         run: moon check
 
+      - name: Check formatting
+        run: moon fmt --check
+
+      - name: Build
+        run: moon build
+
       - name: Test
         run: moon test

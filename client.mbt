@@ -712,10 +712,12 @@ fn validate_request(request : Request) -> Unit raise ProtocolError {
       // `-1` asks the server to pick the source slab itself; anything below
       // is not a slab class at all.
       guard src >= -1 else {
-        raise Malformed("slab class cannot be below -1: \{src}")
+        raise Malformed("slab source class cannot be below -1: \{src}")
       }
-      guard dst >= -1 else {
-        raise Malformed("slab class cannot be below -1: \{dst}")
+      // Only the source may be left to the server: the target names the class
+      // the page moves into, so it has to be one.
+      guard dst >= 0 else {
+        raise Malformed("slab target class cannot be negative: \{dst}")
       }
     }
     SlabsAutomove(mode~, ..) => {

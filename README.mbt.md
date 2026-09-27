@@ -10,10 +10,44 @@
 - 首选编译目标：`wasm-gc`
 - 依赖：仅 `moonbitlang/core` 的 `buffer`、`debug`、`encoding/utf8`、`string`
 
+## 安装
+
+模块名为 `lexchb/memcached`，在模块目录里用包管理器添加即可：
+
+```shell
+moon add lexchb/memcached
+```
+
+本包不引入任何第三方依赖，因此没有 memcached 服务端、也没有网络的环境里同样可以构建、测试与
+运行示例。要在本仓库内复现下面的一切，克隆后执行第九节「运行方式」里的命令即可。
+
+## 快速开始
+
+传输通道由使用方实现 `Connection`；包内自带的内存实现 `ScriptedConnection` 让下面的最小样例
+不需要 socket 就能跑通（完整的多场景版本见 `cmd/main/main.mbt`）：
+
+```moonbit nocheck
+// 内存转录：服务器依次回答 STORED 与一个 VALUE 块。
+let conn = @memcached.ScriptedConnection::new([
+  b"STORED\r\n", b"VALUE foo 0 3\r\nbar\r\nEND\r\n",
+])
+let client = @memcached.Client::new(conn)
+println(client.set("foo", b"bar")) // Status::Stored
+for value in client.get(["foo"]) {
+  println(value.key) // foo
+  println(value.data) // b"bar"
+}
+```
+
+接真实网络时只需为 socket 实现同一个 `Connection`（`read` 在无数据时阻塞，返回空表示对端
+已关闭），上面这段客户端代码不需要任何改动；超时、重连与连接池同样落在实现里。
+
 ## 一、目录结构
 
 | 路径 | 作用 |
 | --- | --- |
+| `README.md` | 仓库首页入口：项目目标、安装、快速开始与验收信息 |
+| `README.mbt.md` | 本文件：完整设计文档（数据模型、编解码流程、校验、边界） |
 | `memcached.mbt` | 协议编解码层：请求编码、响应解码、错误类型 |
 | `transport.mbt` | 传输层抽象：`Connection` trait 与内存版 `ScriptedConnection` |
 | `client.mbt` | 客户端层：`Client`、请求校验、便捷命令方法 |
@@ -481,7 +515,7 @@ key 与那个字节都经 `quote` 处理（见第五节第 6 小节），制表�
 | `FlushAll` | `delay` 为 `Some(n)` 时要求 `n >= 0` |
 | `Verbosity` | `level < 0` 即拒绝 |
 | `CacheMemlimit` | `megabytes < 0` 即拒绝 |
-| `SlabsReassign` | `src` / `dst` 不得小于 `-1`（`-1` 表示由服务器自选源 slab） |
+| `SlabsReassign` | `src` 不得小于 `-1`（`-1` 表示由服务器自选源 slab）；`dst` 不得小于 `0`——只有源可以交给服务器挑，目标必须指明一个 class |
 | `SlabsAutomove` | `mode` 只接受 `0` / `1` / `2` |
 | `Version` / `Quit` | 无需校验 |
 
@@ -524,7 +558,7 @@ trait Connection {
 
 ## 九、测试与示例
 
-两个套件都不需要 memcached 服务端，`moon test` 共 94 个用例（黑盒 60 + 白盒 34）。
+两个套件都不需要 memcached 服务端，`moon test` 共 100 个用例（黑盒 65 + 白盒 35）。
 
 ### 黑盒测试（`memcached_test.mbt`）
 
@@ -540,17 +574,20 @@ trait Connection {
   `VERSION` 时等待）、数据块以字节数定帧（值内含 `\r\n`）、响应跨 feed 重组、单次 feed
   多响应、服务器错误的三种类别、`Remote` 错误行被消费后**后面那条应答仍读得出来**（同一个
   错误不会对每次 `next()` 重复抛出）、非法帧（未知行、字段数不对、数据块未以 CRLF 结尾）；
-- **客户端**：单连接上 set + get 的完整往返与线上字节断言、cas 透传令牌、便捷存储方法透传
-  flags/exptime（线上字节逐字节断言）、计数器返回值、
+- **客户端**：单连接上 set + get 的完整往返与线上字节断言、cas 透传令牌、`set`/`cas` 便捷方法
+  透传 flags/exptime（线上字节逐字节断言）、`add`/`replace`/`append`/`prepend` 各自驱动对应的
+  命令词、`gets` 带回每个块的 CAS 令牌、`delete` 与 `decr` 读回自己那条应答、计数器返回值、
+  大应答（5000 字节的块，超过一次 4096 字节的读取）被连接拆成多次 read 后照样重组、
   `touch`/`gat`/`gats` 往返、`version` 与 `stats` 的取值、`flush_all`/`verbosity`/
   `cache_memlimit`/`slabs` 系命令读回 `OK`、
   `send` 写出 `noreply` 命令且**一个字节都不读**、有应答的命令不能 `send`、无应答的命令不能
-  `execute`、`quit`（含写入失败时仍释放连接）、响应中途断连报 `TransportError::Io`、
+  `execute`、`quit`（含写入失败时仍释放连接，以及关闭也失败时就地吞掉、只报出导致放弃连接的那条
+  发送错误）、响应中途断连报 `TransportError::Io`、
   未知行报 `Malformed`、key 长度与字符合法性边界（250 通过 / 251 拒绝 / 空串 / 空格 /
-  制表符 / 换行）、空 key 列表与管理命令的非法参数（负的 megabytes、小于 -1 的 slab class、
-  超出 `0..=2` 的 automove 模式）在写出任何字节之前就被拒绝、声明的字节数远大于可用数据时只是
-  等待而不是错误分帧、始终无法定帧的应答被 `with_limit` **当场**判为 `Malformed` 而不是无限缓冲、
-  失步的连接经 `Client::resync` 清空残片后照常往返；
+  制表符 / 换行）、空 key 列表与管理命令的非法参数（负的 megabytes、小于 -1 的 slab source、
+  负的 slab target、超出 `0..=2` 的 automove 模式）在写出任何字节之前就被拒绝、声明的字节数远大于
+  可用数据时只是等待而不是错误分帧、始终无法定帧的应答被 `with_limit` **当场**判为 `Malformed`
+  而不是无限缓冲、失步的连接经 `Client::resync` 清空残片后照常往返；
 - **流水线批处理**：三个请求（有应答 / `noreply` / 有应答）的槽位与请求一一对齐、线上字节逐字节
   断言；用一个把 `write`/`read` 调用**按顺序记下来**的测试替身（`TracingConnection`）证明整批
   **先全部写完再开始读**，以及全 `noreply` 的批次只写不读；空批次不写不读返回空；应答跨读边界
@@ -573,8 +610,9 @@ trait Connection {
 - 数字解析：`is_decimal` 对符号/字母/内嵌空格的拒绝，`parse_decimal` 的 u64 上界
   （`18446744073709551615` 通过 / `...616` 拒绝），`parse_decimal_int` 的 i32 上界
   （`2147483647` 通过 / `2147483648` 拒绝）；
-- `parse_value_header`：四/五字段、非 ASCII key、字段数不对、非数字字段、超界值；以及
-  `<bytes>` 的块上限——它由**传入的 `limit` 决定**，且判据算的是「块 + 头行 + 块尾 `\r\n` +
+- `parse_value_header`：四/五字段、非 ASCII key、字段数不对、非数字字段、超界值；头行的字节数由
+  调用方按它在线上的长度传入（`decode_response` 传的就是行尾分隔符的偏移），不再重新编码取长度；
+  以及 `<bytes>` 的块上限——它由**传入的 `limit` 决定**，且判据算的是「块 + 头行 + 块尾 `\r\n` +
   `END` 行」能否装进 `limit`（分帧部分直接取常量 `VALUE_RETRIEVAL_FRAMING` 的字节数，不手算）：
   memcached 自身的 1 MiB item 上限（`1048576`）连分帧也放得进 `DEFAULT_BUFFER_LIMIT`，属于
   「还在路上」的块必须通过，而恰好等于上限的声明会被拒绝（分帧没有容身之处）；换成 `limit=64`
@@ -599,12 +637,14 @@ trait Connection {
   必要条件——每个块单独都放得下、合起来超过 `limit` 的响应不会被它拦下：整段一次到齐时照常解出
   全部块，同样的字节若缺了收尾的 `END` 堆在缓冲里，才由 `next()` 按 `Desynchronised` 报出；
   `resync()` 丢弃失步残片后，解码器能立刻从下一个完整响应上重新同步；
-- `expect_values` / `expect_status` / `expect_counter`：响应种类不符即 `Malformed`；
+- `expect_values` / `expect_status` / `expect_counter` / `expect_version` / `expect_stats`：
+  响应种类不符即 `Malformed`；
 - 校验：`validate_key` 对 `0x1F`、`0x7F` 等控制字符与长度边界的判定（含多字节字符按
   UTF-8 字节计数的 249 通过 / 252 拒绝），并且逐个断言拒绝时的**消息原文**——空 key 那条不带
   参数，超长那条报出 251 与 250 两个数，撞上制表符、空格、`0x7F` 时把违规字节转义后附在 key
   后面；`validate_request` 覆盖每条带 key 的命令，以及三条管理命令的参数边界
-  （`cache_memlimit` 拒绝负数、`slabs reassign` 以 `-1` 为下限、`slabs automove` 只收 `0..=2`）；
+  （`cache_memlimit` 拒绝负数、`slabs reassign` 的 `src` 以 `-1` 为下限而 `dst` 以 `0` 为下限
+  且两者分别报出是哪一边出错、`slabs automove` 只收 `0..=2`）；
   `stats` 的段名另有一组用例——`detail on`、`cachedump 1 100` 这类多词段名通过，而空段名、
   首尾空格、连续两个空格、含制表符的段名都拒绝；空段名与超长段名同走长度判据，报出实际字节数
   与 `1..250`；首空格、尾空格、连续两个空格留下的空词收敛到同一条 `stats section has an empty
@@ -621,11 +661,21 @@ trait Connection {
 
 ### 运行方式
 
+克隆本仓库后，按下面五步复现全部结果：
+
 ```shell
-moon test          # 跑测试
-moon run cmd/main  # 跑演示程序
-moon info && moon fmt
+moon check                 # 类型检查（CI 的第一步）
+moon build                 # 构建整个模块（含 cmd/main，CI 的第二步）
+moon test                  # 跑测试（CI 的第三步）
+moon coverage analyze      # 查看未被测试覆盖的行
+moon run cmd/main          # 跑演示程序
+moon info && moon fmt      # 更新接口文件并格式化
 ```
+
+CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在每次 push 与 pull request 上依次
+执行 `moon check`、`moon build`、`moon test`，对应验收要求里的「检查、构建、测试」三流程；
+`moon fmt --check` 也在其中，用于拦住未格式化的提交。本包不依赖第三方库，因此这些命令在
+没有 memcached 服务端、也没有网络的环境里同样能全部通过。
 
 `cmd/main/main.mbt` 用 `ScriptedConnection` 演示五段内容：请求编码结果（带转义，便于看清
 `\r\n` 分帧，含 `gat`、`noreply` 的 `del!`、`stats items`、`flush_all 10`）、单连接客户端的
@@ -759,3 +809,13 @@ noreply` / get：先打印整批的线上字节，再逐槽位打印结果，`no
 `flags/exptime` 透传与「管理子命令 + `Client::resync`」已完成（`cache_memlimit` / `slabs reassign` /
 `slabs automove` 与 `Client::resync` 已就位）；`流水线批处理` 也已完成（`Client::pipeline`，见第六节）。
 后续：`socket + 连接池`（取决于 MoonBit 生态）→ `meta 协议` / `二进制协议`（按需）。UDP 从规划移除。
+
+1. 项目以 MoonBit 为主要实现语言；
+2. GitHub 仓库公开可访问，提交记录清晰；
+3. 源代码结构清晰，能够完成声明的核心功能；
+4. 提供 README，说明项目目标、安装方式、使用方法和示例，并可复现；
+5. 使用持续集成工具并且覆盖检查、构建、测试流程；
+6. 提供至少一个可运行示例或最小使用样例；
+7. 提供完整测试，覆盖核心功能路径；
+8. 发布到 mooncakes.io；
+9. 采用 OSI 认可的开源许可证；如参考或移植其他开源项目，应符合原项目许可证要求。

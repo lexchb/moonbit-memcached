@@ -377,6 +377,11 @@ fn quote(text : StringView) -> String {
 
 ///|
 /// Decode a single non-`VALUE` response line.
+///
+/// A `CLIENT_ERROR` / `SERVER_ERROR` line is recognised by its introducer word
+/// and the space that separates it from the message; a line that merely starts
+/// with the same letters (`CLIENT_ERRORS`) is not one of them, and falls through
+/// to the malformed branch.
 fn decode_status(
   line : StringView,
   offset : Int,
@@ -398,9 +403,9 @@ fn decode_status(
     (Response::Status(Status::Ok), offset)
   } else if text == "ERROR" {
     raise Remote(RemoteErrorKind::Generic, text)
-  } else if text.has_prefix("CLIENT_ERROR") {
+  } else if text == "CLIENT_ERROR" || text.has_prefix("CLIENT_ERROR ") {
     raise Remote(RemoteErrorKind::Client, text)
-  } else if text.has_prefix("SERVER_ERROR") {
+  } else if text == "SERVER_ERROR" || text.has_prefix("SERVER_ERROR ") {
     raise Remote(RemoteErrorKind::Server, text)
   } else if is_decimal(text.view()) {
     (Response::Counter(parse_decimal(text.view(), "counter value")), offset)
@@ -438,9 +443,14 @@ const VALUE_RETRIEVAL_FRAMING : Bytes = b"\r\n\r\nEND\r\n"
 ///|
 /// Parse a `VALUE <key> <flags> <bytes> [<cas unique>]` header line.
 ///
-/// `line` is the header without its terminating CRLF, which
-/// `VALUE_RETRIEVAL_FRAMING` counts in its place: a caller that passed the
-/// raw line would have those two bytes counted twice.
+/// `line` is the header without its terminating CRLF, and `header_bytes` is how
+/// many bytes that line took on the wire; together they pay for the CRLF that
+/// `VALUE_RETRIEVAL_FRAMING` accounts for, so a caller that passed the raw line
+/// would have those two bytes counted twice. The caller knows that byte count
+/// already - it is the offset of the separator that ended the line - which is
+/// why it is handed over instead of being recovered by encoding `line` again:
+/// re-encoding a lossily decoded line would not necessarily measure the bytes
+/// that actually arrived.
 ///
 /// `limit` is how many bytes the decoder that receives this block accepts
 /// buffered. A retrieval has to be buffered whole before it can be decoded, and
@@ -465,6 +475,7 @@ const VALUE_RETRIEVAL_FRAMING : Bytes = b"\r\n\r\nEND\r\n"
 /// buffer's verdict rather than a header's.
 fn parse_value_header(
   line : String,
+  header_bytes : Int,
   limit : Int,
 ) -> ValueHeader raise ProtocolError {
   let fields = line.view().split(" ").collect()
@@ -472,9 +483,7 @@ fn parse_value_header(
     raise Malformed("malformed VALUE line '\{quote(line.view())}'")
   }
   let size = parse_decimal_int(fields[3], "bytes")
-  let needed = @utf8.encode(line.view()).length() +
-    size +
-    VALUE_RETRIEVAL_FRAMING.length()
+  let needed = header_bytes + size + VALUE_RETRIEVAL_FRAMING.length()
   guard needed <= limit else {
     raise Malformed(
       "a VALUE block of \{size} bytes needs \{needed} bytes with its header and the END line, more than the \{limit}-byte block limit",
@@ -541,7 +550,7 @@ fn decode_value_blocks(
         "expected 'VALUE' or 'END', found '\{quote(line.view())}'",
       )
     }
-    current = parse_value_header(line, limit)
+    current = parse_value_header(line, eol, limit)
     cursor = next + eol + 2
   }
   abort("unreachable")
@@ -615,7 +624,12 @@ fn decode_response(
   let line = decode_line(bytes.view(end=eol))
   let offset = eol + 2
   if line.has_prefix("VALUE ") {
-    decode_value_blocks(bytes, parse_value_header(line, limit), offset, limit)
+    decode_value_blocks(
+      bytes,
+      parse_value_header(line, eol, limit),
+      offset,
+      limit,
+    )
   } else if line.has_prefix("STAT ") {
     // Every line of a `stats` reply is a `STAT` line, including this first
     // one, so the section is decoded from the start of the buffer.
