@@ -9,5 +9,13 @@
 set -e
 
 moon check
-moon fmt --check
+
+# The formatting check looks at the whole project rather than at the staged
+# files, so the offending file may be one this commit never touched. Say how to
+# fix it, because the diff it prints reads like a problem with the commit.
+if ! moon fmt --check; then
+  echo "pre-commit: run 'moon fmt' at the repository root and stage the result." >&2
+  exit 1
+fi
+
 moon test
