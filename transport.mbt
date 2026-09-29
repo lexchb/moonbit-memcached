@@ -15,6 +15,10 @@ pub(all) suberror TransportError {
 } derive(@debug.Debug)
 
 ///|
+/// `Debug` method of [`TransportError`], promoted to a regular method.
+pub extend TransportError with @debug.Debug::{to_repr}
+
+///|
 /// A duplex byte channel.
 pub(open) trait Connection {
   /// Send every byte of `data` to the peer.
@@ -82,3 +86,8 @@ pub impl Connection for ScriptedConnection with fn close(self) {
   self.index = self.chunks.length()
   self.pending = Bytes::new(0)
 }
+
+///|
+/// [`Connection`] methods of [`ScriptedConnection`], promoted to regular
+/// methods.
+pub extend ScriptedConnection with Connection::{read, close, write}

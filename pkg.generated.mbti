@@ -14,10 +14,12 @@ pub suberror ProtocolError {
   Malformed(String)
   Desynchronised(Int, Int)
 } derive(@debug.Debug)
+pub fn ProtocolError::to_repr(Self) -> @debug.Repr
 
 pub(all) suberror TransportError {
   Io(String)
 } derive(@debug.Debug)
+pub fn TransportError::to_repr(Self) -> @debug.Repr
 
 // Types and methods
 pub struct Client {
@@ -72,6 +74,9 @@ pub enum RemoteErrorKind {
   Client
   Server
 } derive(Eq, @debug.Debug)
+pub fn RemoteErrorKind::equal(Self, Self) -> Bool
+pub fn RemoteErrorKind::not_equal(Self, Self) -> Bool
+pub fn RemoteErrorKind::to_repr(Self) -> @debug.Repr
 
 pub(all) enum Request {
   Storage(op~ : StorageOp, key~ : String, flags~ : Int, exptime~ : Int, value~ : Bytes, cas~ : UInt64?, noreply~ : Bool)
@@ -90,8 +95,11 @@ pub(all) enum Request {
   SlabsAutomove(mode~ : Int, noreply~ : Bool)
   Quit
 } derive(Eq, @debug.Debug)
+pub fn Request::equal(Self, Self) -> Bool
 pub fn Request::expects_reply(Self) -> Bool
+pub fn Request::not_equal(Self, Self) -> Bool
 pub fn Request::to_bytes(Self) -> Bytes
+pub fn Request::to_repr(Self) -> @debug.Repr
 
 pub enum Response {
   Values(Array[RetrievedValue])
@@ -100,6 +108,9 @@ pub enum Response {
   Version(String)
   Stats(Array[StatEntry])
 } derive(Eq, @debug.Debug)
+pub fn Response::equal(Self, Self) -> Bool
+pub fn Response::not_equal(Self, Self) -> Bool
+pub fn Response::to_repr(Self) -> @debug.Repr
 
 pub struct RetrievedValue {
   key : String
@@ -107,6 +118,9 @@ pub struct RetrievedValue {
   data : Bytes
   cas : UInt64?
 } derive(Eq, @debug.Debug)
+pub fn RetrievedValue::equal(Self, Self) -> Bool
+pub fn RetrievedValue::not_equal(Self, Self) -> Bool
+pub fn RetrievedValue::to_repr(Self) -> @debug.Repr
 
 pub struct ScriptedConnection {
   chunks : Array[Bytes]
@@ -114,7 +128,10 @@ pub struct ScriptedConnection {
   mut pending : Bytes
   written : @buffer.Buffer
 }
+pub fn ScriptedConnection::close(Self) -> Unit raise TransportError
 pub fn ScriptedConnection::new(Array[Bytes]) -> Self
+pub fn ScriptedConnection::read(Self, Int) -> Bytes raise TransportError
+pub fn ScriptedConnection::write(Self, BytesView) -> Unit raise TransportError
 pub fn ScriptedConnection::written(Self) -> Bytes
 pub impl Connection for ScriptedConnection
 
@@ -122,6 +139,9 @@ pub struct StatEntry {
   name : String
   value : String
 } derive(Eq, @debug.Debug)
+pub fn StatEntry::equal(Self, Self) -> Bool
+pub fn StatEntry::not_equal(Self, Self) -> Bool
+pub fn StatEntry::to_repr(Self) -> @debug.Repr
 
 pub(all) enum Status {
   Stored
@@ -132,6 +152,9 @@ pub(all) enum Status {
   Touched
   Ok
 } derive(Eq, @debug.Debug)
+pub fn Status::equal(Self, Self) -> Bool
+pub fn Status::not_equal(Self, Self) -> Bool
+pub fn Status::to_repr(Self) -> @debug.Repr
 
 pub(all) enum StorageOp {
   Set
@@ -141,6 +164,9 @@ pub(all) enum StorageOp {
   Prepend
   Cas
 } derive(Eq, @debug.Debug)
+pub fn StorageOp::equal(Self, Self) -> Bool
+pub fn StorageOp::not_equal(Self, Self) -> Bool
+pub fn StorageOp::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 

@@ -6,7 +6,7 @@
 传输通道被抽象成一个 `Connection` trait，因此整个包不依赖任何 socket，可以在没有 memcached
 服务端的环境下完整地编码、解码与测试。
 
-- 模块名：`lexchb/memcached`，版本 `0.1.0`
+- 模块名：`lexchb/memcached`，版本 `0.2.0`
 - 首选编译目标：`wasm-gc`
 - 依赖：仅 `moonbitlang/core` 的 `buffer`、`debug`、`encoding/utf8`、`string`
 
@@ -151,6 +151,25 @@ for value in client.get(["foo"]) {
 `Malformed` 的消息里若引用了对端的原始字节，会先转义并截断再拼进去（见第五节第 6 小节）；
 `Remote` 携带的则是服务器错误行的**原文**，不转义也不截断——它和 `STAT` 行的字段一样，
 是要交给调用方使用的内容，而不是消息里的引用。
+
+### 相等与调试方法的显式提升
+
+上面这些类型里，七个同时 `derive(Eq, @debug.Debug)`（`RemoteErrorKind`、`StorageOp`、`Request`、
+`RetrievedValue`、`Status`、`StatEntry`、`Response`），两个 suberror 只 `derive(@debug.Debug)`
+（`ProtocolError`、`TransportError`）。`derive` 只负责挂上 trait 实现；把实现里的方法**当作普通方法**
+调用（`a.equal(b)`，而不是 `Eq::equal(a, b)`）是编译器的一项兼容行为，它已被标记为弃用
+（moonc 0.10.14 会报 `implicit_impl_as_method` 告警），并将在未来版本移除。
+
+因此这 23 个方法在各自类型定义之后都配了一条显式的 `pub extend` 声明：
+
+| 类型 | 提升为普通方法的方法 |
+| --- | --- |
+| `RemoteErrorKind` / `StorageOp` / `Request` / `RetrievedValue` / `Status` / `StatEntry` / `Response` | `equal`、`not_equal`（来自 `Eq`）、`to_repr`（来自 `Debug`） |
+| `ProtocolError` / `TransportError` | `to_repr`（来自 `Debug`） |
+
+`pub extend` 声明的是「这些方法同时以普通方法形式可用」，也就是把原本隐式的提升写明白：方法照旧可
+按普通方法调用，将来编译器真的移除那条兼容路径时也不受影响。`Eq` 与 `Debug` 本身仍然照常当 trait
+使用——`==` / `!=` 走 `Eq`，`debug_inspect` 走 `Debug`。
 
 ## 四、请求编码流程
 
@@ -431,7 +450,7 @@ Client { conn : &Connection, decoder : Decoder }
 `stats cachedump 1 100`；词之间的间隔规则由第七节的校验负责。
 
 `quit` 的语义单独说明：服务器对 `quit` **不回复**，所以它走 `send` 而不是 `execute`。
-关闭连接用 postfix `catch` 兜底：`write` 失败时先 `self.conn.close()` 再把错误重新抛出，
+关闭连接用 `errdefer` 兜底：`write` 失败时先 `self.conn.close()` 再把错误重新抛出，
 写成功时在函数末尾关闭，两种情况都不会泄漏连接。这里是**尽力而为**的关闭——若连关闭本身
 也失败了，那个错误被就地吞掉，因为调用方要的是「写不出去」这个原因，而不是「顺手关闭也失败」。
 
@@ -556,6 +575,9 @@ trait Connection {
   可以逐字节断言线上内容。
 - chunk 用尽后 `read` 返回空字节，客户端据此判定为连接关闭。
 - `close` 丢弃剩余的 chunk 和待读数据。
+
+它的 `Connection::{read, close, write}` 同样用显式 `pub extend` 提升为普通方法，理由见第三节
+「相等与调试方法的显式提升」。
 
 ## 九、测试与示例
 

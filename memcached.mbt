@@ -16,6 +16,14 @@ pub enum RemoteErrorKind {
 } derive(Eq, @debug.Debug)
 
 ///|
+/// [`Eq`] methods of [`RemoteErrorKind`], promoted to regular methods.
+pub extend RemoteErrorKind with Eq::{not_equal, equal}
+
+///|
+/// `Debug` method of [`RemoteErrorKind`], promoted to a regular method.
+pub extend RemoteErrorKind with @debug.Debug::{to_repr}
+
+///|
 /// Raised when a response cannot be decoded.
 pub suberror ProtocolError {
   /// The server answered `ERROR`, `CLIENT_ERROR` or `SERVER_ERROR`.
@@ -31,6 +39,10 @@ pub suberror ProtocolError {
 } derive(@debug.Debug)
 
 ///|
+/// `Debug` method of [`ProtocolError`], promoted to a regular method.
+pub extend ProtocolError with @debug.Debug::{to_repr}
+
+///|
 /// Storage commands of the text protocol.
 pub(all) enum StorageOp {
   Set
@@ -40,6 +52,14 @@ pub(all) enum StorageOp {
   Prepend
   Cas
 } derive(Eq, @debug.Debug)
+
+///|
+/// [`Eq`] methods of [`StorageOp`], promoted to regular methods.
+pub extend StorageOp with Eq::{not_equal, equal}
+
+///|
+/// `Debug` method of [`StorageOp`], promoted to a regular method.
+pub extend StorageOp with @debug.Debug::{to_repr}
 
 ///|
 /// A single memcached text protocol request.
@@ -102,6 +122,14 @@ pub(all) enum Request {
 } derive(Eq, @debug.Debug)
 
 ///|
+/// [`Eq`] methods of [`Request`], promoted to regular methods.
+pub extend Request with Eq::{not_equal, equal}
+
+///|
+/// `Debug` method of [`Request`], promoted to a regular method.
+pub extend Request with @debug.Debug::{to_repr}
+
+///|
 /// Whether the server answers `self`.
 ///
 /// `quit` is never answered, and a mutation that carries `noreply` suppresses
@@ -137,6 +165,14 @@ pub struct RetrievedValue {
 } derive(Eq, @debug.Debug)
 
 ///|
+/// [`Eq`] methods of [`RetrievedValue`], promoted to regular methods.
+pub extend RetrievedValue with Eq::{not_equal, equal}
+
+///|
+/// `Debug` method of [`RetrievedValue`], promoted to a regular method.
+pub extend RetrievedValue with @debug.Debug::{to_repr}
+
+///|
 /// Terminal status line of a mutation command.
 pub(all) enum Status {
   Stored
@@ -150,6 +186,14 @@ pub(all) enum Status {
 } derive(Eq, @debug.Debug)
 
 ///|
+/// [`Eq`] methods of [`Status`], promoted to regular methods.
+pub extend Status with Eq::{not_equal, equal}
+
+///|
+/// `Debug` method of [`Status`], promoted to a regular method.
+pub extend Status with @debug.Debug::{to_repr}
+
+///|
 /// One `STAT <name> <value>` line of a `stats` response.
 ///
 /// The value is kept as text: memcached reports both numbers and free-form
@@ -159,6 +203,14 @@ pub struct StatEntry {
   name : String
   value : String
 } derive(Eq, @debug.Debug)
+
+///|
+/// [`Eq`] methods of [`StatEntry`], promoted to regular methods.
+pub extend StatEntry with Eq::{not_equal, equal}
+
+///|
+/// `Debug` method of [`StatEntry`], promoted to a regular method.
+pub extend StatEntry with @debug.Debug::{to_repr}
 
 ///|
 /// A decoded server response.
@@ -174,6 +226,14 @@ pub enum Response {
   /// Result of `stats`: the `STAT` lines up to `END`.
   Stats(Array[StatEntry])
 } derive(Eq, @debug.Debug)
+
+///|
+/// [`Eq`] methods of [`Response`], promoted to regular methods.
+pub extend Response with Eq::{not_equal, equal}
+
+///|
+/// `Debug` method of [`Response`], promoted to a regular method.
+pub extend Response with @debug.Debug::{to_repr}
 
 ///|
 /// Prefix of the `VERSION <string>` response line.
