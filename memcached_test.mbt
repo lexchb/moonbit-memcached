@@ -8,7 +8,7 @@
 /// Decode a single response out of `input`.
 fn decode(input : Bytes) -> @memcached.Response raise {
   let decoder = @memcached.Decoder::new()
-  decoder.feed(input.view())
+  decoder.feed(input.exact_view())
   decoder.next().unwrap()
 }
 
@@ -35,7 +35,7 @@ fn decode_values(input : Bytes) -> Array[@memcached.RetrievedValue] raise {
 /// the kind of server-side error it raised.
 fn reaction(input : Bytes) -> String {
   let decoder = @memcached.Decoder::new()
-  decoder.feed(input.view())
+  decoder.feed(input.exact_view())
   try {
     let _ = decoder.next()
     "accepted"
@@ -695,7 +695,7 @@ struct TracingConnection {
 ///|
 /// A tracing connection that replays `chunks`.
 fn TracingConnection::new(chunks : Array[Bytes]) -> TracingConnection {
-  { chunks, index: 0, pending: b"", events: [] }
+  { chunks, index: 0, pending: b"", events: [], }
 }
 
 ///|
@@ -716,8 +716,8 @@ impl @memcached.Connection for TracingConnection with fn read(self, max) {
   } else {
     max
   }
-  let head = self.pending.view(end=take).to_owned()
-  self.pending = self.pending.view(start=take).to_owned()
+  let head = self.pending.exact_view(end=take).to_owned()
+  self.pending = self.pending.exact_view(start=take).to_owned()
   head
 }
 
@@ -1080,7 +1080,7 @@ test "a stream that never frames is refused instead of buffered forever" {
 /// or `"malformed"` when it refuses the bytes instead of waiting for the rest.
 fn limited_reaction(limit : Int, input : Bytes) -> String {
   let decoder = @memcached.Decoder::with_limit(limit)
-  decoder.feed(input.view())
+  decoder.feed(input.exact_view())
   try {
     match decoder.next() {
       Some(_) => "accepted"
@@ -1162,7 +1162,7 @@ impl @memcached.Connection for FailingWriteConnection with fn close(self) {
 
 ///|
 test "quit releases the connection when the command cannot be written" {
-  let connection : FailingWriteConnection = { closed: false }
+  let connection : FailingWriteConnection = { closed: false, }
   let client = @memcached.Client::new(connection)
   let outcome = try {
     client.quit()
@@ -1251,7 +1251,7 @@ impl @memcached.Connection for DeadConnection with fn close(self) {
 
 ///|
 test "quit reports the send failure when closing fails as well" {
-  let connection : DeadConnection = { closed: false }
+  let connection : DeadConnection = { closed: false, }
   let client = @memcached.Client::new(connection)
   let outcome = try {
     client.quit()

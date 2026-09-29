@@ -16,14 +16,14 @@ pub struct Client {
 ///|
 /// Wrap an open connection.
 pub fn Client::new(conn : &Connection) -> Client {
-  { conn, decoder: Decoder::new() }
+  { conn, decoder: Decoder::new(), }
 }
 
 ///|
 /// Wrap an open connection with a decoder that accepts `limit` buffered bytes
 /// before it declares the stream out of sync.
 pub fn Client::with_limit(conn : &Connection, limit : Int) -> Client {
-  { conn, decoder: Decoder::with_limit(limit) }
+  { conn, decoder: Decoder::with_limit(limit), }
 }
 
 ///|
@@ -43,7 +43,7 @@ pub fn Client::execute(self : Client, request : Request) -> Response raise {
       "this command has no reply to read; use 'send' for it",
     )
   }
-  self.conn.write(request.to_bytes().view())
+  self.conn.write(request.to_bytes().exact_view())
   self.read_response()
 }
 
@@ -63,7 +63,7 @@ fn Client::read_response(self : Client) -> Response raise {
         if chunk.length() == 0 {
           raise TransportError::Io("server closed the connection mid-response")
         }
-        self.decoder.feed(chunk.view())
+        self.decoder.feed(chunk.exact_view())
       }
     }
   }
@@ -84,7 +84,7 @@ pub fn Client::send(self : Client, request : Request) -> Unit raise {
       "this command has a reply to read; use 'execute' for it",
     )
   }
-  self.conn.write(request.to_bytes().view())
+  self.conn.write(request.to_bytes().exact_view())
 }
 
 ///|
@@ -141,7 +141,7 @@ pub fn Client::pipeline(
   // nothing here would hold it to that.
   let wanted : Array[Bool] = []
   for request in batch {
-    self.conn.write(request.to_bytes().view())
+    self.conn.write(request.to_bytes().exact_view())
     wanted.push(request.expects_reply())
   }
   self.read_replies(wanted)
@@ -477,13 +477,9 @@ pub fn Client::slabs_automove(self : Client, mode : Int) -> Status raise {
 /// is swallowed, because the send error is the one that explains why the
 /// connection is being given up in the first place.
 pub fn Client::quit(self : Client) -> Unit raise {
-  self.send(Request::Quit) catch {
-    err => {
-      self.conn.close() catch {
-        _ => ()
-      }
-      raise err
-    }
+  {
+    errdefer (self.conn.close() catch { _ => () })
+    self.send(Request::Quit)
   }
   self.conn.close()
 }

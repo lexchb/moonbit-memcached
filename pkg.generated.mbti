@@ -150,4 +150,3 @@ pub(open) trait Connection {
   fn read(Self, Int) -> Bytes raise TransportError
   fn close(Self) -> Unit raise TransportError
 }
-

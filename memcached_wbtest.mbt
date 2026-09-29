@@ -78,7 +78,7 @@ fn header_outcome(line : String, limit? : Int = DEFAULT_BUFFER_LIMIT) -> String 
 /// merely returns `None` and waits for more bytes.
 fn response_outcome(input : Bytes) -> String {
   try {
-    ignore(decode_response(input.view(), DEFAULT_BUFFER_LIMIT))
+    ignore(decode_response(input.exact_view(), DEFAULT_BUFFER_LIMIT))
     "ok"
   } catch {
     err => name_of(err)
@@ -103,7 +103,7 @@ fn stat_outcome(line : BytesView) -> String {
 /// not an error: the call returns `None` and waits for more data.
 fn stats_outcome(input : Bytes) -> String {
   try {
-    ignore(decode_stats(input.view()))
+    ignore(decode_stats(input.exact_view()))
     "ok"
   } catch {
     err => name_of(err)
@@ -266,12 +266,12 @@ test "every storage op maps to its command word" {
 
 ///|
 test "find_crlf reports the offset of the first separator" {
-  assert_true(find_crlf(b"\r\nrest".view()) is Some(0))
-  assert_true(find_crlf(b"abc\r\n".view()) is Some(3))
-  assert_true(find_crlf(b"a\r\nb\r\n".view()) is Some(1))
-  assert_true(find_crlf(b"".view()) is None)
-  assert_true(find_crlf(b"abc\r".view()) is None)
-  assert_true(find_crlf(b"abc".view()) is None)
+  assert_true(find_crlf(b"\r\nrest".exact_view()) is Some(0))
+  assert_true(find_crlf(b"abc\r\n".exact_view()) is Some(3))
+  assert_true(find_crlf(b"a\r\nb\r\n".exact_view()) is Some(1))
+  assert_true(find_crlf(b"".exact_view()) is None)
+  assert_true(find_crlf(b"abc\r".exact_view()) is None)
+  assert_true(find_crlf(b"abc".exact_view()) is None)
 }
 
 ///|
@@ -378,8 +378,8 @@ test "decode_status hands back the offset it was given" {
 
 ///|
 test "decode_line renders utf-8 keys as text" {
-  assert_eq(decode_line(b"VALUE 键 0 3".view()), "VALUE 键 0 3")
-  assert_eq(decode_line(b"END".view()), "END")
+  assert_eq(decode_line(b"VALUE 键 0 3".exact_view()), "VALUE 键 0 3")
+  assert_eq(decode_line(b"END".exact_view()), "END")
 }
 
 ///|
@@ -397,7 +397,7 @@ test "a retrieval with many blocks decodes every block" {
   }
   builder.write_string("END\r\n")
   let input = @utf8.encode(builder.to_string().view())
-  match decode_response(input.view(), DEFAULT_BUFFER_LIMIT) {
+  match decode_response(input.exact_view(), DEFAULT_BUFFER_LIMIT) {
     Some((Response::Values(values), consumed)) => {
       assert_eq(values.length(), 64)
       assert_eq(values[0].key, "k0")
@@ -606,27 +606,27 @@ test "a rejected stats section names the hole it would leave" {
 
 ///|
 test "a STAT line splits at its first space only" {
-  let simple = parse_stat_line(b"STAT pid 1234".view())
+  let simple = parse_stat_line(b"STAT pid 1234".exact_view())
   assert_eq(simple.name, "pid")
   assert_eq(simple.value, "1234")
 
   // A value may contain spaces, so only the first one separates the fields.
-  let versioned = parse_stat_line(b"STAT libevent 2.1.12-stable".view())
+  let versioned = parse_stat_line(b"STAT libevent 2.1.12-stable".exact_view())
   assert_eq(versioned.name, "libevent")
   assert_eq(versioned.value, "2.1.12-stable")
 
   // A section nests its dimension into the name rather than into a new field.
-  let nested = parse_stat_line(b"STAT items:1:number 2".view())
+  let nested = parse_stat_line(b"STAT items:1:number 2".exact_view())
   assert_eq(nested.name, "items:1:number")
   assert_eq(nested.value, "2")
 
-  assert_eq(stat_outcome(b"STAT noseparator".view()), "malformed")
-  assert_eq(stat_outcome(b"STAT ".view()), "malformed")
-  assert_eq(stat_outcome(b"STORED".view()), "malformed")
+  assert_eq(stat_outcome(b"STAT noseparator".exact_view()), "malformed")
+  assert_eq(stat_outcome(b"STAT ".exact_view()), "malformed")
+  assert_eq(stat_outcome(b"STORED".exact_view()), "malformed")
   // The first space separates the fields, so one that opens the name leaves
   // the entry without a name to report.
-  assert_eq(stat_outcome(b"STAT  pid 1".view()), "malformed")
-  assert_eq(stat_outcome(b"STAT  1".view()), "malformed")
+  assert_eq(stat_outcome(b"STAT  pid 1".exact_view()), "malformed")
+  assert_eq(stat_outcome(b"STAT  1".exact_view()), "malformed")
 }
 
 ///|
@@ -641,7 +641,7 @@ test "an error message escapes and cuts the peer data it quotes" {
 ///|
 test "the first STAT line belongs to the section" {
   let input = b"STAT pid 1234\r\nEND\r\n"
-  match decode_stats(input.view()) {
+  match decode_stats(input.exact_view()) {
     Some((Response::Stats(entries), consumed)) => {
       assert_eq(entries.length(), 1)
       assert_eq(entries[0].name, "pid")
@@ -657,7 +657,7 @@ test "the first STAT line belongs to the section" {
 ///|
 test "a version line keeps the text that follows its prefix" {
   let input = b"VERSION 1.6.21\r\n"
-  match decode_response(input.view(), DEFAULT_BUFFER_LIMIT) {
+  match decode_response(input.exact_view(), DEFAULT_BUFFER_LIMIT) {
     Some((Response::Version(version), consumed)) => {
       // The prefix is eight bytes long, so a shorter offset would keep part of
       // it (`" 1.6.21"`) inside the version string.
