@@ -46,7 +46,7 @@ pub struct ScriptedConnection {
 /// Each element is handed out by a separate read (truncated to the requested
 /// size), which makes it easy to force the client through partial responses.
 pub fn ScriptedConnection::new(chunks : Array[Bytes]) -> ScriptedConnection {
-  { chunks, index: 0, pending: Bytes::new(0), written: @buffer.Buffer() }
+  { chunks, index: 0, pending: Bytes::new(0), written: @buffer.Buffer(), }
 }
 
 ///|
@@ -72,8 +72,8 @@ pub impl Connection for ScriptedConnection with fn read(self, max) {
   } else {
     max
   }
-  let head = self.pending.view(end=take).to_owned()
-  self.pending = self.pending.view(start=take).to_owned()
+  let head = self.pending.exact_view(end=take).to_owned()
+  self.pending = self.pending.exact_view(start=take).to_owned()
   head
 }
 

@@ -524,7 +524,7 @@ fn decode_value_blocks(
     guard cursor <= bytes.length() else { return None }
     let remaining = bytes.length() - cursor
     guard remaining >= 2 && current.size <= remaining - 2 else { return None }
-    guard bytes.view(start=cursor + current.size).has_prefix(b"\r\n") else {
+    guard bytes.exact_view(start=cursor + current.size).has_prefix(b"\r\n") else {
       raise Malformed(
         "data block of key '\{quote(current.key.view())}' is not terminated by CRLF",
       )
@@ -532,7 +532,7 @@ fn decode_value_blocks(
     values.push({
       key: current.key,
       flags: current.flags,
-      data: bytes.view(start=cursor, end=cursor + current.size).to_owned(),
+      data: bytes.exact_view(start=cursor, end=cursor + current.size).to_owned(),
       cas: current.cas,
     })
     // The CRLF that closes the block: the second of the three pieces
@@ -540,8 +540,10 @@ fn decode_value_blocks(
     // CRLF, stripped before the line was decoded, and the third is the `END`
     // line further down.
     let next = cursor + current.size + 2
-    guard find_crlf(bytes.view(start=next)) is Some(eol) else { return None }
-    let line = decode_line(bytes.view(start=next, end=next + eol))
+    guard find_crlf(bytes.exact_view(start=next)) is Some(eol) else {
+      return None
+    }
+    let line = decode_line(bytes.exact_view(start=next, end=next + eol))
     if line == "END" {
       return Some((Response::Values(values), next + eol + 2))
     }
@@ -568,7 +570,7 @@ fn parse_stat_line(line : BytesView) -> StatEntry raise ProtocolError {
   guard line.has_prefix(b"STAT ") else {
     raise Malformed("expected a STAT line, found '\{quote(text.view())}'")
   }
-  let body = line.view(start=5)
+  let body = line.exact_view(start=5)
   guard body.find(b" ") is Some(separator) else {
     raise Malformed("malformed STAT line '\{quote(text.view())}'")
   }
@@ -576,8 +578,8 @@ fn parse_stat_line(line : BytesView) -> StatEntry raise ProtocolError {
     raise Malformed("a STAT line needs a name: '\{quote(text.view())}'")
   }
   {
-    name: decode_line(body.view(end=separator)),
-    value: decode_line(body.view(start=separator + 1)),
+    name: decode_line(body.exact_view(end=separator)),
+    value: decode_line(body.exact_view(start=separator + 1)),
   }
 }
 
@@ -591,8 +593,10 @@ fn decode_stats(bytes : BytesView) -> (Response, Int)? raise ProtocolError {
   let mut cursor = 0
   while true {
     guard cursor <= bytes.length() else { return None }
-    guard find_crlf(bytes.view(start=cursor)) is Some(eol) else { return None }
-    let line = bytes.view(start=cursor, end=cursor + eol)
+    guard find_crlf(bytes.exact_view(start=cursor)) is Some(eol) else {
+      return None
+    }
+    let line = bytes.exact_view(start=cursor, end=cursor + eol)
     let text = decode_line(line)
     let next = cursor + eol + 2
     if text == "END" {
@@ -621,7 +625,7 @@ fn decode_response(
   limit : Int,
 ) -> (Response, Int)? raise ProtocolError {
   guard find_crlf(bytes) is Some(eol) else { return None }
-  let line = decode_line(bytes.view(end=eol))
+  let line = decode_line(bytes.exact_view(end=eol))
   let offset = eol + 2
   if line.has_prefix("VALUE ") {
     decode_value_blocks(
@@ -638,7 +642,7 @@ fn decode_response(
     // The prefix is pure ASCII, so its character length is also its byte
     // length and can be used as a byte offset into the line.
     let payload = decode_line(
-      bytes.view(start=VERSION_PREFIX.length(), end=eol),
+      bytes.exact_view(start=VERSION_PREFIX.length(), end=eol),
     )
     Some((Response::Version(payload), offset))
   } else if line == "END" {
@@ -675,13 +679,13 @@ const DEFAULT_BUFFER_LIMIT : Int = 8 * 1024 * 1024
 ///|
 /// A decoder that accepts up to `DEFAULT_BUFFER_LIMIT` buffered bytes.
 pub fn Decoder::new() -> Decoder {
-  { buffer: Bytes::new(0), limit: DEFAULT_BUFFER_LIMIT }
+  { buffer: Bytes::new(0), limit: DEFAULT_BUFFER_LIMIT, }
 }
 
 ///|
 /// A decoder that accepts up to `limit` buffered bytes.
 pub fn Decoder::with_limit(limit : Int) -> Decoder {
-  { buffer: Bytes::new(0), limit }
+  { buffer: Bytes::new(0), limit, }
 }
 
 ///|
@@ -724,8 +728,8 @@ pub fn Decoder::resync(self : Decoder) -> Unit {
 /// find the same line again. The line is known to end in CRLF, because that is
 /// what let it be read as a line at all.
 fn Decoder::drop_line(self : Decoder) -> Unit {
-  match find_crlf(self.buffer.view()) {
-    Some(eol) => self.buffer = self.buffer.view(start=eol + 2).to_owned()
+  match find_crlf(self.buffer.exact_view()) {
+    Some(eol) => self.buffer = self.buffer.exact_view(start=eol + 2).to_owned()
     // Unreachable in practice, since that very separator is what let the line be
     // read at all. Doing nothing is the safe answer if that ever changes:
     // dropping a prefix of unknown length would lose framing that may still be
@@ -760,7 +764,7 @@ fn Decoder::drop_line(self : Decoder) -> Unit {
 /// response at all, so where the next response starts is exactly what is no
 /// longer known - that is what [`Decoder::resync`] is for.
 pub fn Decoder::next(self : Decoder) -> Response? raise ProtocolError {
-  let decoded = decode_response(self.buffer.view(), self.limit) catch {
+  let decoded = decode_response(self.buffer.exact_view(), self.limit) catch {
     Remote(kind, text) => {
       self.drop_line()
       raise Remote(kind, text)
@@ -776,7 +780,7 @@ pub fn Decoder::next(self : Decoder) -> Response? raise ProtocolError {
       None
     }
     Some((response, consumed)) => {
-      self.buffer = self.buffer.view(start=consumed).to_owned()
+      self.buffer = self.buffer.exact_view(start=consumed).to_owned()
       Some(response)
     }
   }
