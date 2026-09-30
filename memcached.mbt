@@ -181,7 +181,8 @@ pub(all) enum Status {
   NotFound
   Deleted
   Touched
-  /// `OK`, the acknowledgement of `flush_all` and `verbosity`.
+  /// `OK`, the acknowledgement of `flush_all`, `verbosity`, `cache_memlimit`
+  /// and the `slabs` commands.
   Ok
 } derive(Eq, @debug.Debug)
 

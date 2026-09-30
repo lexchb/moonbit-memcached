@@ -253,10 +253,13 @@ Decoder::next
 - `STORED`、`NOT_STORED`、`EXISTS`、`NOT_FOUND`、`DELETED`、`TOUCHED`、`OK` → 对应的 `Status`
   （`OK` 是 `flush_all`、`verbosity`、`cache_memlimit` 与 `slabs` 系命令的应答）
 - `ERROR` → `Remote(Generic, 行内容)`
-- 以 `CLIENT_ERROR` 开头 → `Remote(Client, ...)`
-- 以 `SERVER_ERROR` 开头 → `Remote(Server, ...)`
+- 以 `CLIENT_ERROR` 这个词打头（词后跟空格或行尾）→ `Remote(Client, ...)`
+- 以 `SERVER_ERROR` 这个词打头（词后跟空格或行尾）→ `Remote(Server, ...)`
 - 全为 ASCII 数字 → `Counter(值)`（`incr`/`decr` 的返回）
 - 其它 → `Malformed("unexpected response line ...")`
+
+两条错误行判据认的是**引入词**而不只是开头的字母：`CLIENT_ERRORS` 这类只是前几个字符相同的行
+不算错误行，`ERROR` 也必须整行就是它本身，两者都落到最后一条 `Malformed` 分支。
 
 ### 3. `VALUE` 块
 
@@ -531,7 +534,7 @@ key 与那个字节都经 `quote` 处理（见第五节第 6 小节），制表�
 | --- | --- |
 | `Storage` / `Delete` / `Incr` / `Decr` / `Touch` | 校验 key |
 | `Get` / `Gat` | key 列表至少一个（否则生成 `get \r\n` 毫无意义），并逐个校验 key |
-| `Stats` | 有子命令时，段名是命令行里的一串「词」：段名可以带参数（`stats detail on`、`stats cachedump 1 100`），词之间只允许**单个**空格，且每个词都要满足 key 的规则（非空、≤250 字节、无空白与控制字符）。空段名、首尾空格、连续两个空格都会留下一个空词，一律拒绝 |
+| `Stats` | 有子命令时，段名是命令行里的一串「词」：段名可以带参数（`stats detail on`、`stats cachedump 1 100`），词之间只允许**单个**空格；长度判据落在**整段**上（1..250 字节，上限借自 key），词内每个字节另须满足 key 的字符规则（非空白、非控制字符）。空段名、首尾空格、连续两个空格都会留下一个空词，一律拒绝 |
 | `FlushAll` | `delay` 为 `Some(n)` 时要求 `n >= 0` |
 | `Verbosity` | `level < 0` 即拒绝 |
 | `CacheMemlimit` | `megabytes < 0` 即拒绝 |
@@ -544,7 +547,9 @@ key 与那个字节都经 `quote` 处理（见第五节第 6 小节），制表�
 1..250 bytes this client allows` 而不是声称服务器要求 250 字节，据实说明这是本客户端自己的闸。
 整段为空交给长度判据，与超长段名报同一条 `outside the 1..250 bytes`；首空格、尾空格、
 连续两个空格留下的空词交给扫描，不论空词出现在什么位置，都收敛到**同一条**
-`stats section has an empty word`，错误种类不会随位置变化。
+`stats section has an empty word`，错误种类不会随位置变化。扫描是单趟按字节前进的，所以
+非法字节与空词同时出现时，报出的是先撞上的**非法字节**那条：只有整段都不含非法字节，
+`stats section has an empty word` 才会露面。两者兼有时调用方不能指望按空词来识别。
 
 校验只回答“能不能表达成一行合法命令”，不替服务器判断语义：例如 `touch` 一个不存在的 key
 是合法的命令行，服务器回 `NOT_FOUND`，本库照样把它编码发出去。
@@ -608,7 +613,7 @@ trait Connection {
   发送错误）、响应中途断连报 `TransportError::Io`、
   未知行报 `Malformed`、key 长度与字符合法性边界（250 通过 / 251 拒绝 / 空串 / 空格 /
   制表符 / 换行）、空 key 列表与管理命令的非法参数（负的 megabytes、小于 -1 的 slab source、
-  负的 slab target、超出 `0..=2` 的 automove 模式）在写出任何字节之前就被拒绝、声明的字节数远大于
+  超出 `0..=2` 的 automove 模式）在写出任何字节之前就被拒绝、声明的字节数远大于
   可用数据时只是等待而不是错误分帧、始终无法定帧的应答被 `with_limit` **当场**判为 `Malformed`
   而不是无限缓冲、失步的连接经 `Client::resync` 清空残片后照常往返；
 - **流水线批处理**：三个请求（有应答 / `noreply` / 有应答）的槽位与请求一一对齐、线上字节逐字节
@@ -754,8 +759,9 @@ noreply` / get：先打印整批的线上字节，再逐槽位打印结果，`no
   `stats detail on` 与第六节的 `stats_of("cachedump 1 100")` 举的是**命令行怎么拼**，应答的结构化
   解码受本条限制——`Decoder` 只按 `STAT` 行解分节，要支持这些分节得在接口层面补。
 - **`slabs` 只认得 `OK`**：`slabs reassign` 会合法地回 `BUSY` / `SAME` / `NOSPARE` / `BADCLASS`，
-  `slabs automove` 除 `OK` 外还会回 `ERROR`，这些都落在状态词白名单之外，表现为
-  `ProtocolError::Malformed`。
+  这些落在状态词白名单之外，表现为 `ProtocolError::Malformed`；`slabs automove` 回的 `ERROR`
+  走的是另一条路——它整行就是一条服务器错误行，按第五节第 2 小节被认成
+  `ProtocolError::Remote(Generic, "ERROR")`。两者都拿不到 `Status`，但类型不同，调用方要分别处理。
 - **校验不做数值范围检查**：`flags`、`exptime`、`cas` 的取值本身不校验，`exptime` 为负会直接
   编码成 `-1` 交给服务器裁决；真正越界的是**解码**侧——`parse_decimal` 在 u64 上界之外报
   `Malformed` 而不是静默回绕，`parse_decimal_int` 对超过 `i32` 上界的字段同样报错。
