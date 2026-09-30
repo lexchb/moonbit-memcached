@@ -352,9 +352,9 @@ test "a VALUE header beyond the decoder's limit is refused before it is buffered
 ///|
 test "an oversized block is reported against the limit, not the data" {
   // The declaration is the only place the problem shows, so the decoder says so
-  // instead of waiting for a block that could never fit. Naming the declaration,
-  // what it needs with its framing and the limit tells the two possible culprits
-  // apart: a peer that lost its framing, or a limit too small for the block.
+  // instead of waiting for a block that could never fit. Naming the declaration
+  // and the limit tells the two possible culprits apart: a peer that lost its
+  // framing, or a limit too small for the block.
   let decoder = Decoder::with_limit(8)
   decoder.feed(b"VALUE k 0 100\r\nabc")
   try {
@@ -363,7 +363,7 @@ test "an oversized block is reported against the limit, not the data" {
   } catch {
     ProtocolError::Malformed(message) =>
       assert_eq(
-        message, "a VALUE block of 100 bytes needs 122 bytes with its header and the END line, more than the 8-byte block limit",
+        message, "a VALUE block of 100 bytes needs more than the 8-byte block limit",
       )
     _ => abort("expected a malformed error")
   }

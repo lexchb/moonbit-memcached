@@ -481,7 +481,9 @@ pub fn Client::quit(self : Client) -> Unit raise {
     errdefer (self.conn.close() catch { _ => () })
     self.send(Request::Quit)
   }
-  self.conn.close()
+  self.conn.close() catch {
+    _ => ()
+  }
 }
 
 ///|

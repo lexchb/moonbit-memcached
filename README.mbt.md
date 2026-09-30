@@ -278,11 +278,13 @@ CRLF、块尾的 `\r\n`、收尾的 `END\r\n`——字节数由编译器数，�
 `buffered <= limit` 是同一根尺子，不会留下「头放过了、缓冲却永远凑不齐」的空档；装不下的头
 当场报 `Malformed`，而不是先缓冲到上限再说。多块响应下这道检查只是必要条件，例外见第五节。
 
-消息里同时给出声明值、计入分帧后的实际需求与上限（`a VALUE block of 100 bytes needs 122 bytes
-with its header and the END line, more than the 8-byte block limit`），因为「太大」有两种成因：
-对端失了分帧，或者**调用方的 `limit` 比服务端的 item 上限还小**。默认上限 8 MiB 高于 memcached
-默认的 1 MiB item 上限，所以默认配置下这条路径只在失步时触发；把 `limit` 调小之后，它同样会
-拦下本来合法的块。
+消息里给出声明值与上限（`a VALUE block of 100 bytes needs more than the 8-byte
+block limit`），因为「太大」有两种成因：对端失了分帧，或者**调用方的 `limit` 比服务端的
+item 上限还小**。默认上限 8 MiB 高于 memcached 默认的 1 MiB item 上限，所以默认配置下这条
+路径只在失步时触发；把 `limit` 调小之后，它同样会拦下本来合法的块。判据用**减法**
+（`size <= limit - framing` 且 `header_bytes <= limit - size - framing`）而不是把三项加起来，
+是为了避免对端把 `size` 填到接近 i32 上限时，`header_bytes + size + framing` 溢出为负数、
+绕过 `<= limit` 检查后在块循环里越界。
 
 `decode_value_blocks` 负责把数据主体和结尾的 `END` 收齐，关键点有两个：
 

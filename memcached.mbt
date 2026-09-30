@@ -544,10 +544,19 @@ fn parse_value_header(
     raise Malformed("malformed VALUE line '\{quote(line.view())}'")
   }
   let size = parse_decimal_int(fields[3], "bytes")
-  let needed = header_bytes + size + VALUE_RETRIEVAL_FRAMING.length()
-  guard needed <= limit else {
+  let framing = VALUE_RETRIEVAL_FRAMING.length()
+  // Check with subtraction rather than `header_bytes + size + framing`: a peer
+  // that sends a `size` close to the i32 cap would otherwise make that sum wrap
+  // negative and slip past `needed <= limit`, then trip an out-of-bounds slice
+  // inside the block loop.
+  guard size <= limit - framing else {
     raise Malformed(
-      "a VALUE block of \{size} bytes needs \{needed} bytes with its header and the END line, more than the \{limit}-byte block limit",
+      "a VALUE block of \{size} bytes needs more than the \{limit}-byte block limit",
+    )
+  }
+  guard header_bytes <= limit - size - framing else {
+    raise Malformed(
+      "a VALUE block of \{size} bytes needs more than the \{limit}-byte block limit",
     )
   }
   {
