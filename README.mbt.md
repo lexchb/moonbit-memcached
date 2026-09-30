@@ -747,6 +747,15 @@ noreply` / get：先打印整批的线上字节，再逐槽位打印结果，`no
   压缩值等都不支持；文本协议这边的管理命令覆盖 `stats [<section>]`（段名本身可带参数，
   如 `stats detail on`）、`cache_memlimit` 与 `slabs reassign`/`automove`，`lru_crawler`、
   `lru tuner`、`shutdown` 等仍未支持。
+- **`stats` 只解得了返回 `STAT` 行的分节**：分节应答里除收尾的 `END` 外，每一行都必须以 `STAT `
+  开头，所以 `stats`、`stats items`、`stats slabs` 可用，而 `stats cachedump`（`ITEM ...` 行）、
+  `stats detail dump`（`PREFIX ...` 行）与 `stats reset`（`RESET`）会被判为 `Malformed`；分节
+  自己空结果时服务器只回一个 `END`，它会被当成 `get` 的空结果，同样报 `Malformed`。第四节的
+  `stats detail on` 与第六节的 `stats_of("cachedump 1 100")` 举的是**命令行怎么拼**，应答的结构化
+  解码受本条限制——`Decoder` 只按 `STAT` 行解分节，要支持这些分节得在接口层面补。
+- **`slabs` 只认得 `OK`**：`slabs reassign` 会合法地回 `BUSY` / `SAME` / `NOSPARE` / `BADCLASS`，
+  `slabs automove` 除 `OK` 外还会回 `ERROR`，这些都落在状态词白名单之外，表现为
+  `ProtocolError::Malformed`。
 - **校验不做数值范围检查**：`flags`、`exptime`、`cas` 的取值本身不校验，`exptime` 为负会直接
   编码成 `-1` 交给服务器裁决；真正越界的是**解码**侧——`parse_decimal` 在 u64 上界之外报
   `Malformed` 而不是静默回绕，`parse_decimal_int` 对超过 `i32` 上界的字段同样报错。
@@ -755,6 +764,10 @@ noreply` / get：先打印整批的线上字节，再逐槽位打印结果，`no
   消费掉。
 - **计数器命令对非数字值**：memcached 会回 `CLIENT_ERROR cannot increment or decrement
   non-numeric value`，在本库中表现为 `ProtocolError::Remote(Client, ...)`。
+- **计数器命令未命中**：memcached 对不存在的 key 回 `NOT_FOUND`，而 `incr` / `decr` 的便捷方法
+  只接受数值应答，于是这种情况表现为 `ProtocolError::Malformed("expected a counter value")`，
+  不是一个可区分的「未命中」。要区分得绕开便捷方法：用 `Client::execute` 发同一条
+  `Request::Incr` / `Request::Decr`，自己匹配 `Response::Status(Status::NotFound)`。
 - **`quit` 不读响应**：这是协议约定（服务器不回复）；若调用方在 `quit` 之后继续用同一
   `Client`，行为未定义。`pipeline` 因此在校验阶段就拒绝 `quit`，避免把“后面写出去的请求永远
   等不到应答”这种状态带到运行期。

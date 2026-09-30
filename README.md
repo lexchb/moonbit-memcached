@@ -60,6 +60,10 @@ moon run cmd/main
 `incr` / `decr`、`touch`、`flush_all`、`verbosity`、`cache_memlimit` 与 `slabs` 系命令支持
 `noreply`。另提供流水线批处理（`Client::pipeline`）与失步恢复（`Client::resync`）。
 
+`stats` 只解得了返回 `STAT` 行的分节（`stats cachedump` 这类分节不在支持范围内），`incr` / `decr`
+未命中会表现为协议错误而不是「未命中」，`slabs` 系命令只识别 `OK` 应答；这些边界与其余限制见
+[README.mbt.md](README.mbt.md) 第十节「已知限制」。
+
 ## 项目结构
 
 | 路径 | 作用 |
